@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { SymptomAnalysis, MatchedHospital, KTAS_INFO, KTASLevel, Dispatch, PatientInfo } from '@/lib/types';
 import NaverMap from '@/components/NaverMap';
+import { getDemoScenario } from '@/lib/demo-scenarios';
 
 const CONGESTION_LABEL: Record<string, { text: string; color: string; bg: string }> = {
   low: { text: '여유', color: '#16A34A', bg: '#DCFCE7' },
@@ -76,6 +77,9 @@ function CountdownTimer({ deadline, onExpired }: { deadline: string; onExpired?:
 
 export default function ParamedicResultPage() {
   const router = useRouter();
+  const [demoId, setDemoId] = useState<string | null>(null);
+  const demoScenario = getDemoScenario(demoId);
+  const demoAutoDispatchedRef = useRef(false);
   const [analysis, setAnalysis] = useState<SymptomAnalysis | null>(null);
   const [symptomsText, setSymptomsText] = useState('');
   const [patientInfo, setPatientInfo] = useState<PatientInfo | null>(null);
@@ -96,6 +100,10 @@ export default function ParamedicResultPage() {
   const [cascadeEnabled, setCascadeEnabled] = useState(true);
   const [cascadeIndex, setCascadeIndex] = useState(0);
   const [cascadeHistory, setCascadeHistory] = useState<Array<{ hospitalName: string; status: string; reason?: string }>>([]);
+
+  useEffect(() => {
+    setDemoId(new URLSearchParams(window.location.search).get('demo'));
+  }, []);
 
   useEffect(() => {
     const stored = sessionStorage.getItem('goldenlink_analysis');
@@ -200,6 +208,45 @@ export default function ParamedicResultPage() {
 
   const handleSelect = useCallback((id: string) => setSelectedId(id), []);
 
+  // Demo auto-dispatch: when matching loads, fire first request automatically
+  useEffect(() => {
+    if (!demoScenario) return;
+    if (loading || hospitals.length === 0) return;
+    if (dispatch || dispatching) return;
+    if (demoAutoDispatchedRef.current) return;
+    demoAutoDispatchedRef.current = true;
+    const t = setTimeout(() => {
+      const first = hospitals[0];
+      if (first) {
+        setSelectedId(first.id);
+        setCascadeIndex(0);
+        dispatchToHospital(first, 0);
+      }
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [demoScenario, loading, hospitals, dispatch, dispatching]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Demo auto-response: simulate hospital reject/accept based on scenario
+  useEffect(() => {
+    if (!demoScenario || !dispatch || dispatch.status !== 'pending') return;
+    const isFirst = cascadeIndex === 0;
+    const shouldReject = isFirst && demoScenario.rejectAfterMs > 0;
+    const delay = shouldReject ? demoScenario.rejectAfterMs : demoScenario.acceptAfterMs;
+    const timer = setTimeout(async () => {
+      const body = shouldReject
+        ? { status: 'rejected' as const, rejectReason: '응급 병상 부족 (시연)' }
+        : { status: 'accepted' as const };
+      try {
+        await fetch(`/api/dispatch/${dispatch.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch { /* ignore */ }
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [dispatch?.id, dispatch?.status, demoScenario, cascadeIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const dispatchToHospital = async (hospital: MatchedHospital, idx: number) => {
     if (!analysis) return;
     setDispatching(true);
@@ -293,6 +340,28 @@ export default function ParamedicResultPage() {
           KTAS {analysis.ktasLevel} {ktas.label}
         </div>
       </header>
+
+      {demoScenario && (
+        <div className="bg-gradient-to-r from-purple-600 via-pink-600 to-red-600 text-white px-5 py-2.5">
+          <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex items-center justify-center w-6 h-6 bg-white/20 backdrop-blur rounded-md flex-shrink-0">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              </span>
+              <span className="text-xs font-bold flex-shrink-0">DEMO</span>
+              <span className="text-xs text-white/90 truncate">
+                {!dispatch ? '병원 매칭 중...' :
+                  dispatch.status === 'pending' ? `자동 이송 요청 (${dispatch.hospitalName})` :
+                  dispatch.status === 'rejected' ? '거절 → 캐스케이드 자동 전환 중' :
+                  dispatch.status === 'accepted' ? '이송 수락 — 시연 완료' : ''}
+              </span>
+            </div>
+            <button onClick={() => router.push('/')} className="text-xs text-white/90 hover:text-white underline whitespace-nowrap flex-shrink-0">
+              중단
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col max-w-2xl mx-auto w-full">
         {/* Map */}

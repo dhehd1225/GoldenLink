@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SymptomAnalysis, KTAS_INFO, KTASLevel, PatientInfo, DEFAULT_PATIENT_INFO, CONSCIOUSNESS_LABELS } from '@/lib/types';
+import { getDemoScenario, DemoScenario } from '@/lib/demo-scenarios';
 
 const QUICK_SYMPTOMS = [
   { label: '흉통', icon: 'heart', text: '흉통, 가슴 압박감, 호흡곤란' },
@@ -30,6 +31,7 @@ const AVPU_VISIBLE: Array<Exclude<PatientInfo['consciousnessLevel'], 'unset'>> =
 
 export default function ParamedicInputPage() {
   const router = useRouter();
+  const [demoId, setDemoId] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [interimText, setInterimText] = useState('');
   const [selectedQuickSymptoms, setSelectedQuickSymptoms] = useState<Set<string>>(new Set());
@@ -40,7 +42,9 @@ export default function ParamedicInputPage() {
   const [showPermissionGuide, setShowPermissionGuide] = useState(false);
   const [showPatientInfo, setShowPatientInfo] = useState(true);
   const [patientInfo, setPatientInfo] = useState<PatientInfo>({ ...DEFAULT_PATIENT_INFO });
+  const [demoStep, setDemoStep] = useState<string>('');
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const demoStartedRef = useRef(false);
 
   const startRecording = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -98,6 +102,87 @@ export default function ParamedicInputPage() {
   useEffect(() => {
     return () => { recognitionRef.current?.stop(); };
   }, []);
+
+  const runDemoSequence = useCallback(async (scenario: DemoScenario) => {
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+    setDemoStep('환자 정보 자동 입력 중...');
+    setShowPatientInfo(true);
+    await sleep(600);
+    setPatientInfo(scenario.patientInfo);
+    await sleep(1100);
+
+    setDemoStep('빠른 증상 칩 선택');
+    setSelectedQuickSymptoms(new Set(scenario.quickSymptoms));
+    await sleep(800);
+
+    setDemoStep('현장 증상 입력 (음성 인식 시뮬레이션)');
+    for (let i = 0; i <= scenario.symptomsText.length; i++) {
+      setText(scenario.symptomsText.slice(0, i));
+      await sleep(35);
+    }
+    await sleep(700);
+
+    setDemoStep('AI 증상 분석 중...');
+    setIsAnalyzing(true);
+    setError('');
+
+    const chipsText = scenario.quickSymptoms
+      .map(label => QUICK_SYMPTOMS.find(q => q.label === label)?.text || '')
+      .filter(Boolean)
+      .join(', ');
+    const symptomsCombined = [chipsText, scenario.symptomsText].filter(Boolean).join(', ');
+
+    let prompt = symptomsCombined;
+    const p = scenario.patientInfo;
+    if (p.age) {
+      const g = p.gender === 'male' ? '남성' : p.gender === 'female' ? '여성' : '';
+      prompt = `${p.age}세${g ? ` ${g}` : ''}, ${prompt}`;
+    }
+    if (p.consciousnessLevel !== 'alert' && p.consciousnessLevel !== 'unset') {
+      prompt += `, 의식수준: ${CONSCIOUSNESS_LABELS[p.consciousnessLevel].label}`;
+    }
+    if (p.oxygenSaturation) prompt += `, SpO2: ${p.oxygenSaturation}%`;
+    if (p.heartRate) prompt += `, HR: ${p.heartRate}`;
+    if (p.respiratoryRate) prompt += `, RR: ${p.respiratoryRate}`;
+    if (p.bloodPressureSystolic && p.bloodPressureDiastolic) {
+      prompt += `, BP: ${p.bloodPressureSystolic}/${p.bloodPressureDiastolic}`;
+    }
+    if (p.temperature) prompt += `, BT: ${p.temperature}°C`;
+
+    try {
+      const res = await fetch('/api/analyze-symptoms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: prompt }),
+      });
+      const result: SymptomAnalysis = await res.json();
+      setAnalysis(result);
+      setIsAnalyzing(false);
+      setDemoStep('KTAS 분류 완료 → 병원 매칭으로 이동');
+      await sleep(2200);
+
+      sessionStorage.setItem('goldenlink_analysis', JSON.stringify(result));
+      sessionStorage.setItem('goldenlink_symptoms_text', symptomsCombined);
+      sessionStorage.setItem('goldenlink_patient_info', JSON.stringify(scenario.patientInfo));
+      router.push(`/paramedic/result?demo=${scenario.id}`);
+    } catch {
+      setIsAnalyzing(false);
+      setError('데모 분석에 실패했습니다.');
+      setDemoStep('');
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (demoStartedRef.current) return;
+    const id = new URLSearchParams(window.location.search).get('demo');
+    if (!id) return;
+    const scenario = getDemoScenario(id);
+    if (!scenario) return;
+    demoStartedRef.current = true;
+    setDemoId(id);
+    runDemoSequence(scenario);
+  }, [runDemoSequence]);
 
   const toggleQuickSymptom = (label: string) => {
     setSelectedQuickSymptoms(prev => {
@@ -210,6 +295,24 @@ export default function ParamedicInputPage() {
           </div>
         </div>
       </header>
+
+      {/* Demo Mode Banner */}
+      {demoId && (
+        <div className="bg-gradient-to-r from-purple-600 via-pink-600 to-red-600 text-white px-5 py-2.5">
+          <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="flex items-center justify-center w-6 h-6 bg-white/20 backdrop-blur rounded-md flex-shrink-0">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              </span>
+              <span className="text-xs font-bold flex-shrink-0">DEMO</span>
+              <span className="text-xs text-white/90 truncate">— {demoStep || '준비 중'}</span>
+            </div>
+            <button onClick={() => router.push('/')} className="text-xs text-white/90 hover:text-white underline whitespace-nowrap flex-shrink-0">
+              중단
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 p-4 flex flex-col gap-3 max-w-2xl mx-auto w-full pb-8">
         {/* Patient Info Toggle */}
