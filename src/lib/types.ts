@@ -12,7 +12,7 @@ export const KTAS_INFO: Record<KTASLevel, { label: string; color: string; bg: st
 export interface PatientInfo {
   age: number | null;
   gender: 'male' | 'female' | 'unknown';
-  consciousnessLevel: 'alert' | 'verbal' | 'pain' | 'unresponsive'; // AVPU scale
+  consciousnessLevel: 'unset' | 'alert' | 'verbal' | 'pain' | 'unresponsive'; // AVPU scale ('unset' = 구급대원이 아직 미입력)
   bloodPressureSystolic: number | null;
   bloodPressureDiastolic: number | null;
   heartRate: number | null;
@@ -27,7 +27,7 @@ export interface PatientInfo {
 export const DEFAULT_PATIENT_INFO: PatientInfo = {
   age: null,
   gender: 'unknown',
-  consciousnessLevel: 'alert',
+  consciousnessLevel: 'unset',
   bloodPressureSystolic: null,
   bloodPressureDiastolic: null,
   heartRate: null,
@@ -39,11 +39,12 @@ export const DEFAULT_PATIENT_INFO: PatientInfo = {
   medications: '',
 };
 
-export const CONSCIOUSNESS_LABELS: Record<PatientInfo['consciousnessLevel'], { label: string; description: string; color: string }> = {
-  alert: { label: 'A (명료)', description: '의식 명료, 자발적 반응', color: '#16A34A' },
-  verbal: { label: 'V (언어반응)', description: '언어 자극에 반응', color: '#CA8A04' },
-  pain: { label: 'P (통증반응)', description: '통증 자극에만 반응', color: '#EA580C' },
-  unresponsive: { label: 'U (무반응)', description: '자극에 무반응', color: '#DC2626' },
+export const CONSCIOUSNESS_LABELS: Record<PatientInfo['consciousnessLevel'], { label: string; short: string; description: string; color: string }> = {
+  unset: { label: '미입력', short: '?', description: '아직 평가 안 됨', color: '#94A3B8' },
+  alert: { label: 'A 명료', short: 'A', description: '의식 명료, 자발적 반응', color: '#16A34A' },
+  verbal: { label: 'V 언어', short: 'V', description: '언어 자극에 반응', color: '#CA8A04' },
+  pain: { label: 'P 통증', short: 'P', description: '통증 자극에만 반응', color: '#EA580C' },
+  unresponsive: { label: 'U 무반응', short: 'U', description: '자극에 무반응', color: '#DC2626' },
 };
 
 export interface Hospital {

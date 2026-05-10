@@ -26,21 +26,26 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
   burn: <path d="M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 17.41 3.8 13.5.67zM11.71 19c-1.78 0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 4.04 0 2.65-2.15 4.8-4.8 4.8z" />,
 };
 
+const AVPU_VISIBLE: Array<Exclude<PatientInfo['consciousnessLevel'], 'unset'>> = ['alert', 'verbal', 'pain', 'unresponsive'];
+
 export default function ParamedicInputPage() {
   const router = useRouter();
   const [text, setText] = useState('');
+  const [interimText, setInterimText] = useState('');
+  const [selectedQuickSymptoms, setSelectedQuickSymptoms] = useState<Set<string>>(new Set());
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<SymptomAnalysis | null>(null);
   const [error, setError] = useState('');
-  const [showPatientInfo, setShowPatientInfo] = useState(false);
+  const [showPermissionGuide, setShowPermissionGuide] = useState(false);
+  const [showPatientInfo, setShowPatientInfo] = useState(true);
   const [patientInfo, setPatientInfo] = useState<PatientInfo>({ ...DEFAULT_PATIENT_INFO });
   const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const startRecording = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setError('이 브라우저는 음성 입력을 지원하지 않습니다.');
+      setError('이 브라우저는 음성 입력을 지원하지 않습니다. Chrome, Edge, Safari를 사용해 주세요.');
       return;
     }
     const recognition = new SpeechRecognition();
@@ -48,57 +53,101 @@ export default function ParamedicInputPage() {
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let interim = '';
       let finalTranscript = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
+        const r = event.results[i];
+        if (r.isFinal) finalTranscript += r[0].transcript;
+        else interim += r[0].transcript;
       }
-      if (finalTranscript) setText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+      if (finalTranscript) {
+        setText(prev => prev + (prev ? ' ' : '') + finalTranscript);
+        setAnalysis(null);
+      }
+      setInterimText(interim);
     };
     recognition.onerror = (event: Event & { error?: string }) => {
       setIsRecording(false);
+      setInterimText('');
       const errType = event.error;
-      if (errType === 'not-allowed') setError('마이크 권한이 거부되었습니다.');
-      else if (errType === 'no-speech') setError('음성이 감지되지 않았습니다.');
-      else if (errType === 'network') setError('네트워크 오류입니다.');
+      if (errType === 'not-allowed') {
+        setError('마이크 권한이 거부되었습니다.');
+        setShowPermissionGuide(true);
+      } else if (errType === 'no-speech') {
+        setError('음성이 감지되지 않았습니다. 다시 시도해 주세요.');
+      } else if (errType === 'network') {
+        setError('네트워크 오류입니다. 연결 상태를 확인해 주세요.');
+      } else if (errType === 'audio-capture') {
+        setError('마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.');
+      }
     };
-    recognition.onend = () => setIsRecording(false);
+    recognition.onend = () => { setIsRecording(false); setInterimText(''); };
     recognitionRef.current = recognition;
     recognition.start();
     setIsRecording(true);
     setError('');
+    setShowPermissionGuide(false);
   }, []);
 
   const stopRecording = useCallback(() => {
     recognitionRef.current?.stop();
     setIsRecording(false);
+    setInterimText('');
   }, []);
 
   useEffect(() => {
     return () => { recognitionRef.current?.stop(); };
   }, []);
 
-  const addQuickSymptom = (symptomText: string) => {
-    setText(prev => prev ? `${prev}, ${symptomText}` : symptomText);
+  const toggleQuickSymptom = (label: string) => {
+    setSelectedQuickSymptoms(prev => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
     setAnalysis(null);
   };
 
-  const updatePatient = (field: keyof PatientInfo, value: unknown) => {
+  const updatePatient = <K extends keyof PatientInfo>(field: K, value: PatientInfo[K]) => {
     setPatientInfo(prev => ({ ...prev, [field]: value }));
   };
 
+  const buildSymptomsText = () => {
+    const chipsText = QUICK_SYMPTOMS
+      .filter(s => selectedQuickSymptoms.has(s.label))
+      .map(s => s.text)
+      .join(', ');
+    const userText = text.trim();
+    return [chipsText, userText].filter(Boolean).join(', ');
+  };
+
   const analyzeSymptoms = async () => {
-    if (!text.trim()) { setError('증상을 입력해주세요.'); return; }
+    const symptomsText = buildSymptomsText();
+    if (!symptomsText) { setError('증상을 입력하거나 빠른 입력을 선택해 주세요.'); return; }
     setIsAnalyzing(true);
     setError('');
     try {
-      // Build enhanced prompt with patient info
-      let prompt = text.trim();
-      if (patientInfo.age) prompt = `${patientInfo.age}세 ${patientInfo.gender === 'male' ? '남성' : patientInfo.gender === 'female' ? '여성' : ''}, ${prompt}`;
-      if (patientInfo.consciousnessLevel !== 'alert') prompt += `, 의식수준: ${CONSCIOUSNESS_LABELS[patientInfo.consciousnessLevel].label}`;
+      let prompt = symptomsText;
+      if (patientInfo.age) {
+        const genderLabel = patientInfo.gender === 'male' ? '남성' : patientInfo.gender === 'female' ? '여성' : '';
+        prompt = `${patientInfo.age}세${genderLabel ? ` ${genderLabel}` : ''}, ${prompt}`;
+      }
+      if (patientInfo.consciousnessLevel !== 'alert' && patientInfo.consciousnessLevel !== 'unset') {
+        prompt += `, 의식수준: ${CONSCIOUSNESS_LABELS[patientInfo.consciousnessLevel].label}`;
+      }
       if (patientInfo.oxygenSaturation) prompt += `, SpO2: ${patientInfo.oxygenSaturation}%`;
       if (patientInfo.heartRate) prompt += `, HR: ${patientInfo.heartRate}`;
+      if (patientInfo.respiratoryRate) prompt += `, RR: ${patientInfo.respiratoryRate}`;
       if (patientInfo.bloodPressureSystolic && patientInfo.bloodPressureDiastolic) {
         prompt += `, BP: ${patientInfo.bloodPressureSystolic}/${patientInfo.bloodPressureDiastolic}`;
+      }
+      if (patientInfo.temperature) prompt += `, BT: ${patientInfo.temperature}°C`;
+      if (patientInfo.allergies && patientInfo.allergies !== '없음' && patientInfo.allergies !== '확인불가') {
+        prompt += `, 알레르기: ${patientInfo.allergies}`;
+      }
+      if (patientInfo.medications && patientInfo.medications !== '없음' && patientInfo.medications !== '확인불가') {
+        prompt += `, 복용약물: ${patientInfo.medications}`;
       }
 
       const res = await fetch('/api/analyze-symptoms', {
@@ -109,7 +158,7 @@ export default function ParamedicInputPage() {
       if (!res.ok) throw new Error('분석 실패');
       setAnalysis(await res.json());
     } catch {
-      setError('증상 분석에 실패했습니다. 다시 시도해주세요.');
+      setError('증상 분석에 실패했습니다. 다시 시도해 주세요.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -118,12 +167,30 @@ export default function ParamedicInputPage() {
   const goToResult = () => {
     if (!analysis) return;
     sessionStorage.setItem('goldenlink_analysis', JSON.stringify(analysis));
-    sessionStorage.setItem('goldenlink_symptoms_text', text);
+    sessionStorage.setItem('goldenlink_symptoms_text', buildSymptomsText());
     sessionStorage.setItem('goldenlink_patient_info', JSON.stringify(patientInfo));
     router.push('/paramedic/result');
   };
 
   const ktas = analysis ? KTAS_INFO[analysis.ktasLevel as KTASLevel] : null;
+
+  // 위험 신호: 환자 정보 토글 닫혀있어도 보이게
+  const consciousnessLow = patientInfo.consciousnessLevel === 'pain' || patientInfo.consciousnessLevel === 'unresponsive';
+  const consciousnessUnset = patientInfo.consciousnessLevel === 'unset';
+  const spo2Low = patientInfo.oxygenSaturation !== null && patientInfo.oxygenSaturation < 94;
+  const spo2Critical = patientInfo.oxygenSaturation !== null && patientInfo.oxygenSaturation < 90;
+  const hrAbnormal = patientInfo.heartRate !== null && (patientInfo.heartRate > 130 || patientInfo.heartRate < 50);
+  const bpLow = patientInfo.bloodPressureSystolic !== null && patientInfo.bloodPressureSystolic < 90;
+  const hasDanger = consciousnessLow || spo2Critical || hrAbnormal || bpLow;
+
+  const summaryParts: string[] = [];
+  if (patientInfo.age) summaryParts.push(`${patientInfo.age}세`);
+  if (patientInfo.gender !== 'unknown') summaryParts.push(patientInfo.gender === 'male' ? '남' : '여');
+  if (patientInfo.consciousnessLevel !== 'unset' && patientInfo.consciousnessLevel !== 'alert') {
+    summaryParts.push(CONSCIOUSNESS_LABELS[patientInfo.consciousnessLevel].label);
+  }
+  if (patientInfo.oxygenSaturation) summaryParts.push(`SpO2 ${patientInfo.oxygenSaturation}%`);
+  if (patientInfo.heartRate) summaryParts.push(`HR ${patientInfo.heartRate}`);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col page-enter">
@@ -148,24 +215,30 @@ export default function ParamedicInputPage() {
         {/* Patient Info Toggle */}
         <button
           onClick={() => setShowPatientInfo(!showPatientInfo)}
-          className="card !p-4 flex items-center justify-between active:scale-[0.99] transition-transform"
+          className={`card !p-4 flex items-center justify-between active:scale-[0.99] transition-transform ${hasDanger ? 'ring-2 ring-red-300' : ''}`}
         >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="#2563EB">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${hasDanger ? 'bg-red-50' : 'bg-blue-50'}`}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill={hasDanger ? '#DC2626' : '#2563EB'}>
                 <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
               </svg>
             </div>
-            <div className="text-left">
-              <p className="font-bold text-gray-800 text-sm">환자 정보</p>
-              <p className="text-xs text-gray-400">
-                {patientInfo.age ? `${patientInfo.age}세` : '미입력'}
-                {patientInfo.gender !== 'unknown' ? ` / ${patientInfo.gender === 'male' ? '남' : '여'}` : ''}
-                {patientInfo.heartRate ? ` / HR ${patientInfo.heartRate}` : ''}
+            <div className="text-left min-w-0">
+              <div className="flex items-center gap-1.5">
+                <p className="font-bold text-gray-800 text-sm">환자 정보</p>
+                {hasDanger && (
+                  <span className="text-[10px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded-md">위험</span>
+                )}
+                {!hasDanger && consciousnessUnset && (
+                  <span className="text-[10px] font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded-md">의식수준 미입력</span>
+                )}
+              </div>
+              <p className="text-xs text-gray-400 truncate">
+                {summaryParts.length > 0 ? summaryParts.join(' · ') : '나이, 성별, 의식수준, 바이탈 입력'}
               </p>
             </div>
           </div>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="#94A3B8" className={`transition-transform ${showPatientInfo ? 'rotate-180' : ''}`}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="#94A3B8" className={`flex-shrink-0 transition-transform ${showPatientInfo ? 'rotate-180' : ''}`}>
             <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
           </svg>
         </button>
@@ -179,9 +252,10 @@ export default function ParamedicInputPage() {
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">나이</label>
                 <input
                   type="number"
+                  inputMode="numeric"
                   value={patientInfo.age || ''}
                   onChange={e => updatePatient('age', e.target.value ? parseInt(e.target.value) : null)}
-                  placeholder="세"
+                  placeholder="예: 65"
                   className="w-full mt-1 border-2 border-gray-200 rounded-xl p-3 text-lg font-bold focus:border-blue-400 focus:outline-none bg-gray-50/50"
                 />
               </div>
@@ -207,23 +281,26 @@ export default function ParamedicInputPage() {
 
             {/* Consciousness Level (AVPU) */}
             <div>
-              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">의식 수준 (AVPU)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">의식 수준 (AVPU)</label>
+                {consciousnessUnset && (
+                  <span className="text-[10px] font-bold text-amber-600">평가 후 선택</span>
+                )}
+              </div>
               <div className="grid grid-cols-4 gap-2 mt-1">
-                {(Object.keys(CONSCIOUSNESS_LABELS) as Array<keyof typeof CONSCIOUSNESS_LABELS>).map(level => {
+                {AVPU_VISIBLE.map(level => {
                   const info = CONSCIOUSNESS_LABELS[level];
                   const isActive = patientInfo.consciousnessLevel === level;
                   return (
                     <button
                       key={level}
                       onClick={() => updatePatient('consciousnessLevel', level)}
-                      className={`py-2.5 rounded-xl text-xs font-bold transition-all border-2 ${
-                        isActive
-                          ? 'shadow-sm'
-                          : 'bg-gray-50 border-gray-200 text-gray-400'
+                      className={`py-2.5 rounded-xl text-xs font-bold leading-tight transition-all border-2 ${
+                        isActive ? 'shadow-sm' : 'bg-gray-50 border-gray-200 text-gray-400'
                       }`}
-                      style={isActive ? { backgroundColor: `${info.color}10`, borderColor: info.color, color: info.color } : {}}
+                      style={isActive ? { backgroundColor: `${info.color}15`, borderColor: info.color, color: info.color } : {}}
                     >
-                      {info.label.split(' ')[0]}
+                      {info.label}
                     </button>
                   );
                 })}
@@ -234,55 +311,74 @@ export default function ParamedicInputPage() {
             <div>
               <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">바이탈 사인</label>
               <div className="grid grid-cols-2 gap-2 mt-1">
-                <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5">
-                  <span className="text-xs font-bold text-red-500 w-10">BP</span>
+                <div className={`flex items-center gap-1 rounded-xl p-2.5 ${bpLow ? 'bg-red-50 ring-1 ring-red-200' : 'bg-gray-50'}`}>
+                  <span className="text-xs font-bold text-red-500 w-8">BP</span>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={patientInfo.bloodPressureSystolic || ''}
                     onChange={e => updatePatient('bloodPressureSystolic', e.target.value ? parseInt(e.target.value) : null)}
-                    placeholder="수축"
-                    className="w-full bg-transparent text-sm font-bold focus:outline-none"
+                    placeholder="수축기"
+                    aria-label="수축기 혈압"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
                   />
-                  <span className="text-gray-300">/</span>
+                  <span className="text-gray-400 text-base font-bold px-0.5">/</span>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={patientInfo.bloodPressureDiastolic || ''}
                     onChange={e => updatePatient('bloodPressureDiastolic', e.target.value ? parseInt(e.target.value) : null)}
-                    placeholder="이완"
-                    className="w-full bg-transparent text-sm font-bold focus:outline-none"
+                    placeholder="이완기"
+                    aria-label="이완기 혈압"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
                   />
                 </div>
-                <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5">
+                <div className={`flex items-center gap-2 rounded-xl p-2.5 ${hrAbnormal ? 'bg-red-50 ring-1 ring-red-200' : 'bg-gray-50'}`}>
                   <span className="text-xs font-bold text-pink-500 w-10">HR</span>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={patientInfo.heartRate || ''}
                     onChange={e => updatePatient('heartRate', e.target.value ? parseInt(e.target.value) : null)}
-                    placeholder="심박수"
-                    className="w-full bg-transparent text-sm font-bold focus:outline-none"
+                    placeholder="심박"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
                   />
                   <span className="text-xs text-gray-400">bpm</span>
                 </div>
-                <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5">
+                <div className={`flex items-center gap-2 rounded-xl p-2.5 ${spo2Low ? (spo2Critical ? 'bg-red-50 ring-1 ring-red-200' : 'bg-amber-50 ring-1 ring-amber-200') : 'bg-gray-50'}`}>
                   <span className="text-xs font-bold text-blue-500 w-10">SpO2</span>
                   <input
                     type="number"
+                    inputMode="numeric"
                     value={patientInfo.oxygenSaturation || ''}
                     onChange={e => updatePatient('oxygenSaturation', e.target.value ? parseInt(e.target.value) : null)}
-                    placeholder="산소포화도"
-                    className="w-full bg-transparent text-sm font-bold focus:outline-none"
+                    placeholder="포화"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
                   />
                   <span className="text-xs text-gray-400">%</span>
                 </div>
                 <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5">
+                  <span className="text-xs font-bold text-emerald-500 w-10">RR</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={patientInfo.respiratoryRate || ''}
+                    onChange={e => updatePatient('respiratoryRate', e.target.value ? parseInt(e.target.value) : null)}
+                    placeholder="호흡"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
+                  />
+                  <span className="text-xs text-gray-400">/분</span>
+                </div>
+                <div className="flex items-center gap-2 bg-gray-50 rounded-xl p-2.5 col-span-2">
                   <span className="text-xs font-bold text-orange-500 w-10">BT</span>
                   <input
                     type="number"
                     step="0.1"
+                    inputMode="decimal"
                     value={patientInfo.temperature || ''}
                     onChange={e => updatePatient('temperature', e.target.value ? parseFloat(e.target.value) : null)}
                     placeholder="체온"
-                    className="w-full bg-transparent text-sm font-bold focus:outline-none"
+                    className="w-full bg-transparent text-sm font-bold focus:outline-none min-w-0"
                   />
                   <span className="text-xs text-gray-400">°C</span>
                 </div>
@@ -297,9 +393,24 @@ export default function ParamedicInputPage() {
                   type="text"
                   value={patientInfo.allergies}
                   onChange={e => updatePatient('allergies', e.target.value)}
-                  placeholder="없음"
+                  placeholder="없음 / 약물명"
                   className="w-full mt-1 border-2 border-gray-200 rounded-xl p-2.5 text-sm focus:border-blue-400 focus:outline-none bg-gray-50/50"
                 />
+                <div className="flex gap-1 mt-1.5">
+                  {['없음', '확인불가'].map(v => (
+                    <button
+                      key={v}
+                      onClick={() => updatePatient('allergies', v)}
+                      className={`flex-1 py-1 rounded-lg text-[11px] font-semibold transition-all border ${
+                        patientInfo.allergies === v
+                          ? 'bg-blue-50 border-blue-300 text-blue-700'
+                          : 'bg-white border-gray-200 text-gray-500 active:bg-gray-50'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">복용약물</label>
@@ -307,9 +418,24 @@ export default function ParamedicInputPage() {
                   type="text"
                   value={patientInfo.medications}
                   onChange={e => updatePatient('medications', e.target.value)}
-                  placeholder="없음"
+                  placeholder="없음 / 약물명"
                   className="w-full mt-1 border-2 border-gray-200 rounded-xl p-2.5 text-sm focus:border-blue-400 focus:outline-none bg-gray-50/50"
                 />
+                <div className="flex gap-1 mt-1.5">
+                  {['없음', '확인불가'].map(v => (
+                    <button
+                      key={v}
+                      onClick={() => updatePatient('medications', v)}
+                      className={`flex-1 py-1 rounded-lg text-[11px] font-semibold transition-all border ${
+                        patientInfo.medications === v
+                          ? 'bg-blue-50 border-blue-300 text-blue-700'
+                          : 'bg-white border-gray-200 text-gray-500 active:bg-gray-50'
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
@@ -320,8 +446,9 @@ export default function ParamedicInputPage() {
           <div className="flex items-center gap-4 mb-4">
             <button
               onClick={isRecording ? stopRecording : startRecording}
-              className={`relative w-18 h-18 rounded-full flex-shrink-0 flex items-center justify-center text-white transition-all
-                ${isRecording ? 'bg-red-600 shadow-xl shadow-red-600/40 w-[72px] h-[72px]' : 'bg-gradient-to-br from-gray-700 to-gray-900 shadow-lg active:shadow-md active:scale-95 w-[72px] h-[72px]'}`}
+              className={`relative rounded-full flex-shrink-0 flex items-center justify-center text-white transition-all w-[72px] h-[72px]
+                ${isRecording ? 'bg-red-600 shadow-xl shadow-red-600/40' : 'bg-gradient-to-br from-gray-700 to-gray-900 shadow-lg active:shadow-md active:scale-95'}`}
+              aria-label={isRecording ? '음성 입력 중지' : '음성 입력 시작'}
             >
               {isRecording ? (
                 <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
@@ -338,26 +465,55 @@ export default function ParamedicInputPage() {
                 {isRecording ? '듣고 있습니다...' : '음성으로 증상 입력'}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">
-                {isRecording ? '탭하여 중지' : '마이크를 탭하거나 아래에 직접 입력'}
+                {isRecording ? '버튼을 다시 탭하면 중지됩니다' : '마이크를 탭하거나 아래에 직접 입력'}
               </p>
             </div>
           </div>
 
+          {/* Live interim transcript */}
+          {isRecording && interimText && (
+            <div className="mb-3 px-3 py-2 bg-red-50/50 border border-red-100 rounded-xl text-sm text-gray-500 italic">
+              <span className="text-red-500 font-bold not-italic mr-1">●</span>
+              {interimText}
+            </div>
+          )}
+
           {/* Quick symptom chips */}
           <div className="mb-3">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">빠른 입력</p>
-            <div className="flex flex-wrap gap-1.5">
-              {QUICK_SYMPTOMS.map(s => (
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">빠른 입력 (탭하여 추가/제거)</p>
+              {selectedQuickSymptoms.size > 0 && (
                 <button
-                  key={s.label}
-                  onClick={() => addQuickSymptom(s.text)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-full bg-red-50 text-red-700 text-xs font-semibold
-                    border border-red-100 active:bg-red-100 active:scale-95 transition-all"
+                  onClick={() => { setSelectedQuickSymptoms(new Set()); setAnalysis(null); }}
+                  className="text-[10px] font-semibold text-gray-400 hover:text-red-500"
                 >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="opacity-60">{QUICK_ICONS[s.icon]}</svg>
-                  {s.label}
+                  모두 해제
                 </button>
-              ))}
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {QUICK_SYMPTOMS.map(s => {
+                const active = selectedQuickSymptoms.has(s.label);
+                return (
+                  <button
+                    key={s.label}
+                    onClick={() => toggleQuickSymptom(s.label)}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold transition-all active:scale-95 border ${
+                      active
+                        ? 'bg-red-600 text-white border-red-600 shadow-sm shadow-red-600/30'
+                        : 'bg-red-50 text-red-700 border-red-100 active:bg-red-100'
+                    }`}
+                    aria-pressed={active}
+                  >
+                    {active ? (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="opacity-60">{QUICK_ICONS[s.icon]}</svg>
+                    )}
+                    {s.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -365,20 +521,29 @@ export default function ParamedicInputPage() {
           <textarea
             value={text}
             onChange={e => { setText(e.target.value); setAnalysis(null); }}
-            placeholder="예: 40대 남성, 의식 있음, 좌측 흉부 통증, 호흡곤란..."
+            placeholder="추가 증상을 직접 입력하거나 음성 입력. 예: 의식 흐림, 식은땀..."
             className="w-full border-2 border-gray-200 rounded-2xl p-4 text-base min-h-[90px] focus:border-red-400 focus:outline-none resize-none bg-gray-50/50 placeholder:text-gray-300"
           />
-          {text && (
+          {(text || selectedQuickSymptoms.size > 0) && (
             <div className="flex justify-between items-center mt-1">
-              <span className="text-xs text-gray-300">{text.length}자</span>
-              <button onClick={() => { setText(''); setAnalysis(null); }} className="text-xs text-gray-400 hover:text-red-500 transition-colors">초기화</button>
+              <span className="text-xs text-gray-300">
+                {selectedQuickSymptoms.size > 0 && `칩 ${selectedQuickSymptoms.size}개`}
+                {selectedQuickSymptoms.size > 0 && text && ' · '}
+                {text && `${text.length}자`}
+              </span>
+              <button
+                onClick={() => { setText(''); setSelectedQuickSymptoms(new Set()); setAnalysis(null); }}
+                className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+              >
+                초기화
+              </button>
             </div>
           )}
 
           {/* Analyze button */}
           <button
             onClick={analyzeSymptoms}
-            disabled={!text.trim() || isAnalyzing}
+            disabled={(!text.trim() && selectedQuickSymptoms.size === 0) || isAnalyzing}
             className="btn-primary w-full mt-3 flex items-center justify-center gap-2"
           >
             {isAnalyzing ? (
@@ -396,9 +561,19 @@ export default function ParamedicInputPage() {
         </section>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm font-medium flex items-center gap-2">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-            {error}
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm font-medium flex items-start gap-2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0 mt-0.5"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            <div className="flex-1">
+              <p>{error}</p>
+              {showPermissionGuide && (
+                <p className="text-xs text-red-600/80 mt-2 leading-relaxed">
+                  <strong>권한 다시 허용하기:</strong><br />
+                  · Chrome/Edge: 주소창 왼쪽 자물쇠 → 사이트 설정 → 마이크 허용<br />
+                  · Safari (iOS): 설정 → Safari → 마이크 → 허용<br />
+                  · Android: 설정 → 앱 → 브라우저 → 권한 → 마이크 허용
+                </p>
+              )}
+            </div>
           </div>
         )}
 

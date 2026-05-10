@@ -81,7 +81,7 @@ function PatientInfoCard({ info }: { info?: PatientInfo }) {
       <div className="flex flex-wrap gap-2 text-xs">
         {info.age && <span className="bg-white px-2 py-0.5 rounded-md font-semibold text-gray-700">{info.age}세</span>}
         {info.gender !== 'unknown' && <span className="bg-white px-2 py-0.5 rounded-md font-semibold text-gray-700">{info.gender === 'male' ? '남성' : '여성'}</span>}
-        {info.consciousnessLevel !== 'alert' && (
+        {info.consciousnessLevel !== 'alert' && info.consciousnessLevel !== 'unset' && (
           <span className="px-2 py-0.5 rounded-md font-bold" style={{ backgroundColor: `${CONSCIOUSNESS_LABELS[info.consciousnessLevel].color}15`, color: CONSCIOUSNESS_LABELS[info.consciousnessLevel].color }}>
             {CONSCIOUSNESS_LABELS[info.consciousnessLevel].label}
           </span>
