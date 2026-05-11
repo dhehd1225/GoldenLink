@@ -6,7 +6,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> | { id: string } },
 ) {
   const { id } = params instanceof Promise ? await params : params;
-  const hospital = getHospital(id);
+  const hospital = await getHospital(id);
   if (!hospital) return NextResponse.json({ error: '병원을 찾을 수 없습니다.' }, { status: 404 });
   return NextResponse.json(hospital);
 }
@@ -17,7 +17,7 @@ export async function PUT(
 ) {
   const { id } = params instanceof Promise ? await params : params;
   const updates = await req.json();
-  const hospital = updateHospital(id, updates);
+  const hospital = await updateHospital(id, updates);
   if (!hospital) return NextResponse.json({ error: '병원을 찾을 수 없습니다.' }, { status: 404 });
   return NextResponse.json(hospital);
 }

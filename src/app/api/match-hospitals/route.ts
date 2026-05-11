@@ -10,11 +10,11 @@ export async function POST(req: NextRequest) {
     lng: number;
   };
 
-  if (!symptoms || !lat || !lng) {
+  if (!symptoms || typeof lat !== 'number' || typeof lng !== 'number') {
     return NextResponse.json({ error: 'symptoms, lat, lng 필수' }, { status: 400 });
   }
 
-  const hospitals = getHospitals();
+  const hospitals = await getHospitals();
   const matched = matchHospitals(hospitals, symptoms, lat, lng);
   return NextResponse.json(matched);
 }

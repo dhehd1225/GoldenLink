@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { SymptomAnalysis, KTASLevel } from '@/lib/types';
+import { callAI, parseJsonResponse } from '@/lib/ai';
 
 const SYSTEM_PROMPT = `당신은 응급의료 전문 AI입니다. 구급대원이 보고하는 환자 증상을 분석하여 아래 JSON 형식으로만 응답하세요.
 설명 없이 JSON만 출력하세요.
@@ -261,28 +261,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '증상 텍스트가 필요합니다.' }, { status: 400 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(fallbackAnalysis(text));
+  const aiResponse = await callAI({
+    systemPrompt: SYSTEM_PROMPT,
+    userText: `환자 증상: ${text}`,
+    maxTokens: 1024,
+  });
+
+  if (aiResponse) {
+    const parsed = parseJsonResponse<SymptomAnalysis>(aiResponse);
+    if (parsed) return NextResponse.json(parsed);
   }
 
-  try {
-    const client = new Anthropic({ apiKey });
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-6-20250514',
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: `환자 증상: ${text}` }],
-    });
-
-    const content = message.content[0];
-    if (content.type !== 'text') throw new Error('Unexpected response type');
-
-    const cleaned = content.text.replace(/```json\n?|\n?```/g, '').trim();
-    const analysis: SymptomAnalysis = JSON.parse(cleaned);
-    return NextResponse.json(analysis);
-  } catch (e) {
-    console.error('Claude API error, using fallback:', e);
-    return NextResponse.json(fallbackAnalysis(text));
-  }
+  return NextResponse.json(fallbackAnalysis(text));
 }

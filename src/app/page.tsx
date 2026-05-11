@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { DEMO_SCENARIOS } from '@/lib/demo-scenarios';
+import { Dispatch, KTAS_INFO, KTASLevel } from '@/lib/types';
 
 interface QuickStats {
   totalDispatches: number;
@@ -25,6 +26,7 @@ function LiveClock() {
 export default function Home() {
   const [stats, setStats] = useState<QuickStats | null>(null);
   const [showDemoModal, setShowDemoModal] = useState(false);
+  const [activeDispatch, setActiveDispatch] = useState<Dispatch | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -36,6 +38,25 @@ export default function Home() {
       fetch('/api/statistics').then(r => r.json()).then(data => setStats(data)).catch(() => {});
     }, 10000);
     return () => clearInterval(interval);
+  }, []);
+
+  // localStorage 활성 dispatch 감지 → 홈에 진행 중 카드 (새로고침/탭재오픈 복귀 path)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = localStorage.getItem('goldenlink_active_dispatch');
+    if (!id) return;
+    fetch(`/api/dispatch/${id}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: Dispatch | null) => {
+        if (!d) {
+          localStorage.removeItem('goldenlink_active_dispatch');
+          return;
+        }
+        const active = d.status === 'pending' || d.status === 'accepted' || d.status === 'transporting';
+        if (active) setActiveDispatch(d);
+        else localStorage.removeItem('goldenlink_active_dispatch');
+      })
+      .catch(() => localStorage.removeItem('goldenlink_active_dispatch'));
   }, []);
 
   const startDemo = (scenarioId: string) => {
@@ -68,6 +89,40 @@ export default function Home() {
       </header>
 
       <main className="flex-1 flex flex-col justify-center p-5 max-w-3xl mx-auto w-full">
+        {/* Active Dispatch — 진행 중 이송 복귀 카드 */}
+        {activeDispatch && (
+          <Link
+            href="/paramedic/result"
+            className="mb-5 group relative overflow-hidden bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-3xl p-5 shadow-xl shadow-emerald-600/30 active:scale-[0.99] hover:shadow-2xl hover:shadow-emerald-600/40 transition-all block"
+          >
+            <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full blur-2xl" />
+            <div className="relative flex items-center gap-4">
+              <div className="w-14 h-14 bg-white/20 backdrop-blur rounded-2xl flex items-center justify-center flex-shrink-0">
+                {activeDispatch.status === 'pending' ? (
+                  <svg className="animate-spin w-7 h-7" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                ) : activeDispatch.status === 'transporting' ? (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="white" className="ambulance-drive"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99z"/></svg>
+                ) : (
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M21 3L3 10.53v.98l6.84 2.65L12.48 21h.98L21 3z"/></svg>
+                )}
+              </div>
+              <div className="flex-1 text-left min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-white/70">진행 중</p>
+                  <span className="text-[10px] bg-white/20 backdrop-blur px-2 py-0.5 rounded-full font-bold">
+                    {activeDispatch.status === 'pending' ? '병원 응답 대기' : activeDispatch.status === 'accepted' ? '수락 — 출발 대기' : '이송 중'}
+                  </span>
+                </div>
+                <p className="text-base font-black mt-0.5 truncate">{activeDispatch.hospitalName}</p>
+                <p className="text-xs text-white/80">
+                  KTAS {activeDispatch.symptoms.ktasLevel} {KTAS_INFO[activeDispatch.symptoms.ktasLevel as KTASLevel]?.label} · {activeDispatch.distance}km · 약 {activeDispatch.estimatedTime}분
+                </p>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="white" className="flex-shrink-0 group-hover:translate-x-1 transition-transform"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/></svg>
+            </div>
+          </Link>
+        )}
+
         {/* Demo CTA — 심사위원/방문자용 자동 시연 */}
         <button
           onClick={() => setShowDemoModal(true)}
@@ -219,7 +274,7 @@ export default function Home() {
                 <h3 className="text-xl font-black text-gray-900 mt-0.5">시나리오 선택</h3>
                 <p className="text-xs text-gray-500 mt-1">실제 시스템에 가상 환자 데이터를 흘려 자동으로 진행됩니다</p>
               </div>
-              <button onClick={() => setShowDemoModal(false)} className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center active:scale-95 flex-shrink-0">
+              <button onClick={() => setShowDemoModal(false)} className="w-9 h-9 bg-gray-100 rounded-xl flex items-center justify-center active:scale-95 flex-shrink-0" aria-label="시연 모달 닫기">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="#6B7280"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/></svg>
               </button>
             </div>

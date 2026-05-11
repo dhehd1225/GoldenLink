@@ -29,6 +29,14 @@ const QUICK_ICONS: Record<string, React.ReactNode> = {
 
 const AVPU_VISIBLE: Array<Exclude<PatientInfo['consciousnessLevel'], 'unset'>> = ['alert', 'verbal', 'pain', 'unresponsive'];
 
+// AI 분석 중 사용자에게 진행 단계를 시각적으로 보여주는 메시지 (8초 분석 동안 cycling)
+const ANALYSIS_STEPS = [
+  '환자 정보 정리 중...',
+  'AI가 KTAS 등급 분석 중...',
+  '의심 질환·진료과 도출 중...',
+  '결과 정리 중...',
+];
+
 export default function ParamedicInputPage() {
   const router = useRouter();
   const [demoId, setDemoId] = useState<string | null>(null);
@@ -40,11 +48,40 @@ export default function ParamedicInputPage() {
   const [analysis, setAnalysis] = useState<SymptomAnalysis | null>(null);
   const [error, setError] = useState('');
   const [showPermissionGuide, setShowPermissionGuide] = useState(false);
-  const [showPatientInfo, setShowPatientInfo] = useState(true);
+  const [showPatientInfo, setShowPatientInfo] = useState(false);
   const [patientInfo, setPatientInfo] = useState<PatientInfo>({ ...DEFAULT_PATIENT_INFO });
   const [demoStep, setDemoStep] = useState<string>('');
+  const [demoStage, setDemoStage] = useState(0); // 1-6 시연 진행 단계 (전체 흐름의 1-3은 입력 페이지)
+  const [isParsing, setIsParsing] = useState(false);
+  const [autoFilledAt, setAutoFilledAt] = useState<number | null>(null);
+  const [analysisStep, setAnalysisStep] = useState(0);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const demoStartedRef = useRef(false);
+  const accumulatedRef = useRef('');
+
+  const parseAndFill = useCallback(async (rawText: string) => {
+    if (rawText.trim().length < 4) return;
+    setIsParsing(true);
+    try {
+      const res = await fetch('/api/parse-patient-info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: rawText }),
+      });
+      if (!res.ok) throw new Error('parse failed');
+      const { patientInfo: parsed, symptomsText: parsedSymptoms } = await res.json() as {
+        patientInfo: PatientInfo; symptomsText: string;
+      };
+      setPatientInfo(prev => ({ ...prev, ...parsed }));
+      setText(parsedSymptoms || rawText);
+      setShowPatientInfo(true);
+      setAutoFilledAt(Date.now());
+    } catch {
+      // 파싱 실패해도 원본 텍스트는 그대로 유지
+    } finally {
+      setIsParsing(false);
+    }
+  }, []);
 
   const startRecording = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -56,6 +93,7 @@ export default function ParamedicInputPage() {
     recognition.lang = 'ko-KR';
     recognition.continuous = true;
     recognition.interimResults = true;
+    accumulatedRef.current = '';
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       let interim = '';
       let finalTranscript = '';
@@ -65,6 +103,7 @@ export default function ParamedicInputPage() {
         else interim += r[0].transcript;
       }
       if (finalTranscript) {
+        accumulatedRef.current += (accumulatedRef.current ? ' ' : '') + finalTranscript;
         setText(prev => prev + (prev ? ' ' : '') + finalTranscript);
         setAnalysis(null);
       }
@@ -85,13 +124,19 @@ export default function ParamedicInputPage() {
         setError('마이크를 찾을 수 없습니다. 마이크 연결을 확인해 주세요.');
       }
     };
-    recognition.onend = () => { setIsRecording(false); setInterimText(''); };
+    recognition.onend = () => {
+      setIsRecording(false);
+      setInterimText('');
+      const accumulated = accumulatedRef.current;
+      accumulatedRef.current = '';
+      if (accumulated.trim()) parseAndFill(accumulated);
+    };
     recognitionRef.current = recognition;
     recognition.start();
     setIsRecording(true);
     setError('');
     setShowPermissionGuide(false);
-  }, []);
+  }, [parseAndFill]);
 
   const stopRecording = useCallback(() => {
     recognitionRef.current?.stop();
@@ -103,16 +148,36 @@ export default function ParamedicInputPage() {
     return () => { recognitionRef.current?.stop(); };
   }, []);
 
+  useEffect(() => {
+    if (!autoFilledAt) return;
+    const t = setTimeout(() => setAutoFilledAt(null), 12000);
+    return () => clearTimeout(t);
+  }, [autoFilledAt]);
+
+  // AI 분석 중 메시지 cycling (8초 호출 동안 사용자에게 시각적 피드백)
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setAnalysisStep(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setAnalysisStep(s => Math.min(s + 1, ANALYSIS_STEPS.length - 1));
+    }, 1800);
+    return () => clearInterval(interval);
+  }, [isAnalyzing]);
+
   const runDemoSequence = useCallback(async (scenario: DemoScenario) => {
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
     setDemoStep('환자 정보 자동 입력 중...');
+    setDemoStage(1);
     setShowPatientInfo(true);
     await sleep(600);
     setPatientInfo(scenario.patientInfo);
     await sleep(1100);
 
     setDemoStep('빠른 증상 칩 선택');
+    setDemoStage(2);
     setSelectedQuickSymptoms(new Set(scenario.quickSymptoms));
     await sleep(800);
 
@@ -124,6 +189,7 @@ export default function ParamedicInputPage() {
     await sleep(700);
 
     setDemoStep('AI 증상 분석 중...');
+    setDemoStage(3);
     setIsAnalyzing(true);
     setError('');
 
@@ -160,6 +226,7 @@ export default function ParamedicInputPage() {
       setAnalysis(result);
       setIsAnalyzing(false);
       setDemoStep('KTAS 분류 완료 → 병원 매칭으로 이동');
+      setDemoStage(4);
       await sleep(2200);
 
       sessionStorage.setItem('goldenlink_analysis', JSON.stringify(result));
@@ -207,34 +274,39 @@ export default function ParamedicInputPage() {
     return [chipsText, userText].filter(Boolean).join(', ');
   };
 
+  // 환자 정보 + 증상을 AI에 보낼 최종 프롬프트로 결합 (미리보기 + analyzeSymptoms 공통)
+  const buildFullPrompt = () => {
+    let prompt = buildSymptomsText();
+    if (!prompt) return '';
+    if (patientInfo.age) {
+      const g = patientInfo.gender === 'male' ? '남성' : patientInfo.gender === 'female' ? '여성' : '';
+      prompt = `${patientInfo.age}세${g ? ` ${g}` : ''}, ${prompt}`;
+    }
+    if (patientInfo.consciousnessLevel !== 'alert' && patientInfo.consciousnessLevel !== 'unset') {
+      prompt += `, 의식수준: ${CONSCIOUSNESS_LABELS[patientInfo.consciousnessLevel].label}`;
+    }
+    if (patientInfo.oxygenSaturation) prompt += `, SpO2: ${patientInfo.oxygenSaturation}%`;
+    if (patientInfo.heartRate) prompt += `, HR: ${patientInfo.heartRate}`;
+    if (patientInfo.respiratoryRate) prompt += `, RR: ${patientInfo.respiratoryRate}`;
+    if (patientInfo.bloodPressureSystolic && patientInfo.bloodPressureDiastolic) {
+      prompt += `, BP: ${patientInfo.bloodPressureSystolic}/${patientInfo.bloodPressureDiastolic}`;
+    }
+    if (patientInfo.temperature) prompt += `, BT: ${patientInfo.temperature}°C`;
+    if (patientInfo.allergies && patientInfo.allergies !== '없음' && patientInfo.allergies !== '확인불가') {
+      prompt += `, 알레르기: ${patientInfo.allergies}`;
+    }
+    if (patientInfo.medications && patientInfo.medications !== '없음' && patientInfo.medications !== '확인불가') {
+      prompt += `, 복용약물: ${patientInfo.medications}`;
+    }
+    return prompt;
+  };
+
   const analyzeSymptoms = async () => {
-    const symptomsText = buildSymptomsText();
-    if (!symptomsText) { setError('증상을 입력하거나 빠른 입력을 선택해 주세요.'); return; }
+    const prompt = buildFullPrompt();
+    if (!prompt) { setError('증상을 입력하거나 빠른 입력을 선택해 주세요.'); return; }
     setIsAnalyzing(true);
     setError('');
     try {
-      let prompt = symptomsText;
-      if (patientInfo.age) {
-        const genderLabel = patientInfo.gender === 'male' ? '남성' : patientInfo.gender === 'female' ? '여성' : '';
-        prompt = `${patientInfo.age}세${genderLabel ? ` ${genderLabel}` : ''}, ${prompt}`;
-      }
-      if (patientInfo.consciousnessLevel !== 'alert' && patientInfo.consciousnessLevel !== 'unset') {
-        prompt += `, 의식수준: ${CONSCIOUSNESS_LABELS[patientInfo.consciousnessLevel].label}`;
-      }
-      if (patientInfo.oxygenSaturation) prompt += `, SpO2: ${patientInfo.oxygenSaturation}%`;
-      if (patientInfo.heartRate) prompt += `, HR: ${patientInfo.heartRate}`;
-      if (patientInfo.respiratoryRate) prompt += `, RR: ${patientInfo.respiratoryRate}`;
-      if (patientInfo.bloodPressureSystolic && patientInfo.bloodPressureDiastolic) {
-        prompt += `, BP: ${patientInfo.bloodPressureSystolic}/${patientInfo.bloodPressureDiastolic}`;
-      }
-      if (patientInfo.temperature) prompt += `, BT: ${patientInfo.temperature}°C`;
-      if (patientInfo.allergies && patientInfo.allergies !== '없음' && patientInfo.allergies !== '확인불가') {
-        prompt += `, 알레르기: ${patientInfo.allergies}`;
-      }
-      if (patientInfo.medications && patientInfo.medications !== '없음' && patientInfo.medications !== '확인불가') {
-        prompt += `, 복용약물: ${patientInfo.medications}`;
-      }
-
       const res = await fetch('/api/analyze-symptoms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -282,7 +354,7 @@ export default function ParamedicInputPage() {
       {/* Header */}
       <header className="bg-gradient-to-r from-red-600 to-red-700 text-white px-6 py-4 shadow-lg shadow-red-900/20">
         <div className="max-w-2xl mx-auto flex items-center gap-4">
-          <button onClick={() => router.push('/')} className="w-11 h-11 bg-white/15 backdrop-blur rounded-xl flex items-center justify-center active:scale-95 transition-transform">
+          <button onClick={() => router.push('/')} className="w-11 h-11 bg-white/15 backdrop-blur rounded-xl flex items-center justify-center active:scale-95 transition-transform" aria-label="홈으로">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/></svg>
           </button>
           <div className="flex-1">
@@ -299,17 +371,36 @@ export default function ParamedicInputPage() {
       {/* Demo Mode Banner */}
       {demoId && (
         <div className="bg-gradient-to-r from-purple-600 via-pink-600 to-red-600 text-white px-5 py-2.5">
-          <div className="max-w-2xl mx-auto flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="flex items-center justify-center w-6 h-6 bg-white/20 backdrop-blur rounded-md flex-shrink-0">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-              </span>
-              <span className="text-xs font-bold flex-shrink-0">DEMO</span>
-              <span className="text-xs text-white/90 truncate">— {demoStep || '준비 중'}</span>
+          <div className="max-w-2xl mx-auto">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="flex items-center justify-center w-6 h-6 bg-white/20 backdrop-blur rounded-md flex-shrink-0">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </span>
+                <span className="text-xs font-bold flex-shrink-0">DEMO</span>
+                <span className="text-xs text-white/90 truncate">— {demoStep || '준비 중'}</span>
+                {demoStage > 0 && (
+                  <span className="text-[10px] text-white/70 font-bold whitespace-nowrap flex-shrink-0">{demoStage}/6</span>
+                )}
+              </div>
+              <button onClick={() => router.push('/')} className="text-xs text-white/90 hover:text-white underline whitespace-nowrap flex-shrink-0">
+                중단
+              </button>
             </div>
-            <button onClick={() => router.push('/')} className="text-xs text-white/90 hover:text-white underline whitespace-nowrap flex-shrink-0">
-              중단
-            </button>
+            {demoStage > 0 && (
+              <div className="mt-1.5 flex gap-1">
+                {[1, 2, 3, 4, 5, 6].map(s => (
+                  <div
+                    key={s}
+                    className={`h-1 flex-1 rounded-full transition-all duration-500 ${
+                      s < demoStage ? 'bg-white' :
+                      s === demoStage ? 'bg-white/80 animate-pulse' :
+                      'bg-white/20'
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -349,6 +440,18 @@ export default function ParamedicInputPage() {
         {/* Patient Info Form */}
         {showPatientInfo && (
           <section className="card space-y-4 animate-slide-up">
+            {autoFilledAt && (
+              <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-xl p-3 flex items-start gap-2">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="#9333EA" className="flex-shrink-0 mt-0.5"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25z"/></svg>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-purple-700">음성에서 자동 추출됨</p>
+                  <p className="text-[11px] text-purple-600/80 mt-0.5">잘못된 항목이 있으면 직접 수정해 주세요. 누락된 정보도 추가 가능합니다.</p>
+                </div>
+                <button onClick={() => setAutoFilledAt(null)} className="text-purple-400 hover:text-purple-600 flex-shrink-0">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+              </div>
+            )}
             {/* Age & Gender */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -565,12 +668,17 @@ export default function ParamedicInputPage() {
             </button>
             <div className="flex-1">
               <p className="font-bold text-base text-gray-800">
-                {isRecording ? '듣고 있습니다...' : '음성으로 증상 입력'}
+                {isParsing ? 'AI가 환자정보 추출 중...' : isRecording ? '듣고 있습니다...' : '음성으로 한번에 입력'}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">
-                {isRecording ? '버튼을 다시 탭하면 중지됩니다' : '마이크를 탭하거나 아래에 직접 입력'}
+                {isParsing ? '잠시만 기다려 주세요' :
+                 isRecording ? '버튼을 다시 탭하면 종료 + 자동 추출' :
+                 '환자정보 + 증상을 한 번에 말하면 자동 분류'}
               </p>
             </div>
+            {isParsing && (
+              <svg className="animate-spin h-5 w-5 text-purple-500" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            )}
           </div>
 
           {/* Live interim transcript */}
@@ -578,6 +686,16 @@ export default function ParamedicInputPage() {
             <div className="mb-3 px-3 py-2 bg-red-50/50 border border-red-100 rounded-xl text-sm text-gray-500 italic">
               <span className="text-red-500 font-bold not-italic mr-1">●</span>
               {interimText}
+            </div>
+          )}
+
+          {/* Voice example hint */}
+          {!isRecording && !isParsing && (
+            <div className="mb-3 px-3 py-2 bg-purple-50/50 border border-purple-100 rounded-xl">
+              <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider mb-0.5">예시 발화</p>
+              <p className="text-xs text-gray-600 leading-relaxed">
+                &ldquo;65세 남자, 의식 흐림, 혈압 145에 90, 심박 110, 산소포화도 94, 가슴 통증 호소&rdquo;
+              </p>
             </div>
           )}
 
@@ -643,6 +761,20 @@ export default function ParamedicInputPage() {
             </div>
           )}
 
+          {/* AI에 보낼 내용 미리보기 — 투명성 */}
+          {buildFullPrompt() && !isAnalyzing && (
+            <details className="mt-2 group">
+              <summary className="text-[10px] font-bold text-purple-500 uppercase tracking-wider cursor-pointer hover:text-purple-700 transition-colors inline-flex items-center gap-1 select-none">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25z"/></svg>
+                AI에 보낼 내용 미리보기
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" className="group-open:rotate-180 transition-transform"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
+              </summary>
+              <p className="mt-2 px-3 py-2 bg-purple-50/40 border border-purple-100/50 rounded-xl text-[11px] text-gray-700 leading-relaxed">
+                <span className="text-purple-600 font-bold mr-1">→</span>{buildFullPrompt()}
+              </p>
+            </details>
+          )}
+
           {/* Analyze button */}
           <button
             onClick={analyzeSymptoms}
@@ -652,7 +784,7 @@ export default function ParamedicInputPage() {
             {isAnalyzing ? (
               <>
                 <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                AI 분석 중...
+                <span className="transition-opacity duration-300">{ANALYSIS_STEPS[analysisStep]}</span>
               </>
             ) : (
               <>
@@ -682,65 +814,102 @@ export default function ParamedicInputPage() {
 
         {/* Analysis Result */}
         {analysis && ktas && (
-          <section className="card border-l-4 overflow-hidden animate-slide-up" style={{ borderLeftColor: ktas.color }}>
-            {/* KTAS Header */}
-            <div className="flex items-center gap-4 mb-4">
-              <div
-                className="w-14 h-14 rounded-2xl flex flex-col items-center justify-center animate-pulse-glow"
-                style={{ backgroundColor: ktas.bg }}
-              >
-                <span className="text-2xl font-black" style={{ color: ktas.color }}>{analysis.ktasLevel}</span>
-                <span className="text-[9px] font-bold" style={{ color: ktas.color }}>KTAS</span>
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl font-black" style={{ color: ktas.color }}>{ktas.label}</span>
-                  <span className="badge text-xs" style={{ backgroundColor: ktas.bg, color: ktas.color }}>{analysis.ktasLevel}등급</span>
-                </div>
-                <p className="text-gray-500 text-sm mt-0.5">{ktas.description}</p>
-              </div>
+          <section
+            className="relative overflow-hidden rounded-3xl shadow-xl animate-slide-up"
+            style={{
+              background: `linear-gradient(135deg, ${ktas.bg} 0%, white 60%)`,
+              borderTop: `4px solid ${ktas.color}`,
+            }}
+          >
+            {/* AI 배지 */}
+            <div className="absolute top-3 right-3 flex items-center gap-1 bg-white/90 backdrop-blur px-2.5 py-1 rounded-full shadow-sm border border-gray-100">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-purple-600">
+                <path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25z"/>
+              </svg>
+              <span className="text-[10px] font-bold text-purple-700 tracking-wider">AI 분석</span>
             </div>
 
-            {/* Info Grid */}
-            <div className="space-y-3">
+            <div className="p-5">
+              {/* KTAS Hero */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="relative flex-shrink-0">
+                  {analysis.ktasLevel <= 2 && (
+                    <span className="absolute inset-0 rounded-3xl animate-ping opacity-40" style={{ backgroundColor: ktas.color }} />
+                  )}
+                  <div
+                    className="relative w-20 h-20 rounded-3xl flex flex-col items-center justify-center shadow-lg"
+                    style={{ background: `linear-gradient(135deg, ${ktas.color}, ${ktas.color}cc)` }}
+                  >
+                    <span className="text-4xl font-black text-white leading-none">{analysis.ktasLevel}</span>
+                    <span className="text-[9px] font-bold text-white/90 mt-1 tracking-wider">KTAS</span>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">응급도 분류</p>
+                  <p className="text-3xl font-black leading-tight" style={{ color: ktas.color }}>{ktas.label}</p>
+                  <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{ktas.description}</p>
+                </div>
+              </div>
+
+              {/* 의심 질환 — 메인 강조 */}
               {analysis.suspectedConditions.length > 0 && (
-                <div className="bg-gray-50 rounded-2xl p-3">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">의심 질환</p>
+                <div className="bg-white/90 backdrop-blur rounded-2xl p-3.5 mb-2.5 shadow-sm border border-gray-100/80">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" className="text-gray-400"><path d="M19 8h-1.81c-.45-.78-1.07-1.45-1.82-1.96L17 4.41 15.59 3l-2.17 2.17C12.96 5.06 12.49 5 12 5s-.96.06-1.41.17L8.41 3 7 4.41l1.62 1.63C7.88 6.55 7.26 7.22 6.81 8H5v2h1.09c-.05.33-.09.66-.09 1v1H5v2h1v1c0 .34.04.67.09 1H5v2h1.81c1.04 1.79 2.97 3 5.19 3s4.15-1.21 5.19-3H19v-2h-1.09c.05-.33.09-.66.09-1v-1h1v-2h-1v-1c0-.34-.04-.67-.09-1H19V8zm-6 8h-2v-2h2v2zm0-4h-2v-2h2v2z"/></svg>
+                    <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">의심 질환</p>
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {analysis.suspectedConditions.map(c => (
-                      <span key={c} className="px-2.5 py-1 rounded-xl bg-white text-gray-700 text-sm font-semibold shadow-sm">{c}</span>
+                      <span key={c} className="px-3 py-1.5 rounded-xl bg-gray-100 text-gray-800 text-sm font-bold">{c}</span>
                     ))}
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-blue-50 rounded-2xl p-3">
-                  <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-1.5">필요 진료과</p>
+
+              {/* 진료과 + 시설 */}
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div className="bg-white/80 backdrop-blur rounded-2xl p-3 border border-blue-100/60">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-blue-600"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/></svg>
+                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">진료과</p>
+                  </div>
                   <div className="flex flex-wrap gap-1">
                     {analysis.requiredSpecialties.map(s => (
-                      <span key={s} className="px-2 py-0.5 rounded-lg bg-blue-100 text-blue-700 text-xs font-bold">{s}</span>
+                      <span key={s} className="px-2 py-0.5 rounded-lg bg-blue-600 text-white text-[11px] font-bold">{s}</span>
                     ))}
                   </div>
                 </div>
-                {analysis.requiredFacilities.length > 0 && (
-                  <div className="bg-purple-50 rounded-2xl p-3">
-                    <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1.5">필요 시설</p>
+                {analysis.requiredFacilities.length > 0 ? (
+                  <div className="bg-white/80 backdrop-blur rounded-2xl p-3 border border-purple-100/60">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="text-purple-600"><path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2z"/></svg>
+                      <p className="text-[10px] font-bold text-purple-600 uppercase tracking-wider">필요 시설</p>
+                    </div>
                     <div className="flex flex-wrap gap-1">
                       {analysis.requiredFacilities.map(f => (
-                        <span key={f} className="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-700 text-xs font-bold">{f}</span>
+                        <span key={f} className="px-2 py-0.5 rounded-lg bg-purple-600 text-white text-[11px] font-bold">{f}</span>
                       ))}
                     </div>
                   </div>
+                ) : (
+                  <div className="bg-white/40 backdrop-blur rounded-2xl p-3 border border-gray-100/60 flex items-center justify-center text-[10px] text-gray-300 italic">
+                    특수 시설 불필요
+                  </div>
                 )}
               </div>
-              <p className="text-xs text-gray-400 px-1">{analysis.reasoning}</p>
-            </div>
 
-            {/* Find Hospital */}
-            <button onClick={goToResult} className="btn-secondary w-full mt-4 flex items-center justify-center gap-2 text-xl">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-              병원 찾기
-            </button>
+              {/* Reasoning — quote */}
+              <div className="flex gap-2 px-1 mb-4">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" className="text-gray-300 flex-shrink-0 mt-0.5"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg>
+                <p className="text-xs text-gray-600 italic leading-relaxed">{analysis.reasoning}</p>
+              </div>
+
+              {/* Find Hospital */}
+              <button onClick={goToResult} className="btn-secondary w-full flex items-center justify-center gap-2 text-xl">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+                병원 찾기
+              </button>
+            </div>
           </section>
         )}
       </main>

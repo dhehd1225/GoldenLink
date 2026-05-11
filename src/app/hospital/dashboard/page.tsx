@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Hospital, Dispatch, KTAS_INFO, KTASLevel, PatientInfo, CONSCIOUSNESS_LABELS } from '@/lib/types';
 import { ALL_SPECIALTIES } from '@/lib/mock-data';
+import { subscribeToHospitalDispatches, isSupabaseConfigured } from '@/lib/realtime';
 
 const CONGESTION_OPTIONS = [
   { value: 'low', label: '여유', color: '#16A34A', bg: '#DCFCE7' },
@@ -18,8 +19,8 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(min / 60)}시간 ${min % 60}분 전`;
 }
 
-// Notification sound using Web Audio API
-function playAlertSound() {
+// Notification sound using Web Audio API — KTAS 1-2은 더 긴급한 패턴, 3-5는 부드러운 알림
+function playAlertSound(ktasLevel: number = 3) {
   try {
     const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
     const playTone = (freq: number, start: number, duration: number) => {
@@ -34,10 +35,23 @@ function playAlertSound() {
       osc.start(ctx.currentTime + start);
       osc.stop(ctx.currentTime + start + duration);
     };
-    playTone(880, 0, 0.15);
-    playTone(1100, 0.18, 0.15);
-    playTone(880, 0.36, 0.2);
+    if (ktasLevel <= 2) {
+      // KTAS 1-2 (소생/긴급): 4번 연속 높은 톤 — 즉각 주의 환기
+      [0, 0.12, 0.24, 0.4].forEach(t => playTone(1320, t, 0.1));
+    } else {
+      // KTAS 3-5: 3음 멜로디 — 부드러운 알림
+      playTone(880, 0, 0.15);
+      playTone(1100, 0.18, 0.15);
+      playTone(880, 0.36, 0.2);
+    }
   } catch { /* Audio not supported */ }
+}
+
+// Haptic feedback (모바일 햅틱) — 지원 안 되면 no-op
+function vibrate(pattern: number | number[]) {
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try { navigator.vibrate(pattern); } catch { /* ignore */ }
+  }
 }
 
 function ResponseTimer({ deadline }: { deadline?: string }) {
@@ -120,9 +134,10 @@ export default function HospitalDashboardPage() {
   const [activeTab, setActiveTab] = useState<'dispatches' | 'management'>('dispatches');
 
   const [specialists, setSpecialists] = useState<Record<string, boolean>>({});
-  const [orAvailable, setOrAvailable] = useState(0);
+  const [orStatus, setOrStatus] = useState<boolean[]>([]);
   const [congestion, setCongestion] = useState<'low' | 'medium' | 'high'>('medium');
   const [availableBeds, setAvailableBeds] = useState(0);
+  const orAvailable = orStatus.filter(Boolean).length;
 
   // Dispatch state
   const [dispatches, setDispatches] = useState<Dispatch[]>([]);
@@ -132,6 +147,7 @@ export default function HospitalDashboardPage() {
   // Sound state
   const [soundEnabled, setSoundEnabled] = useState(true);
   const prevPendingCountRef = useRef(0);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
     fetch('/api/hospitals').then(r => r.json()).then((data: Hospital[]) => {
@@ -154,7 +170,7 @@ export default function HospitalDashboardPage() {
         if (controller.signal.aborted) return;
         setHospital(data);
         setSpecialists({ ...data.specialists });
-        setOrAvailable(data.operatingRooms.available);
+        setOrStatus(Array.from({ length: data.operatingRooms.total }, (_, i) => i < data.operatingRooms.available));
         setCongestion(data.congestionLevel);
         setAvailableBeds(data.availableBeds);
         setSaved(false);
@@ -171,21 +187,36 @@ export default function HospitalDashboardPage() {
       .then(r => r.json())
       .then((data: Dispatch[]) => {
         setDispatches(data);
-        // Play sound for new pending dispatches
-        const newPendingCount = data.filter((d: Dispatch) => d.status === 'pending').length;
-        if (soundEnabled && newPendingCount > prevPendingCountRef.current) {
-          playAlertSound();
+        const pendings = data.filter((d: Dispatch) => d.status === 'pending');
+        const newPendingCount = pendings.length;
+        // 첫 로드/병원 전환 직후 첫 fetch에선 사운드 억제 (기존 pending 누적 알림 방지)
+        if (hasLoadedRef.current && soundEnabled && newPendingCount > prevPendingCountRef.current) {
+          // 가장 긴급한 KTAS 기준으로 사운드 톤 선택
+          const mostUrgent = Math.min(...pendings.map(d => d.symptoms.ktasLevel));
+          playAlertSound(mostUrgent);
+          vibrate(mostUrgent <= 2 ? [120, 60, 120, 60, 120] : [100]);
         }
         prevPendingCountRef.current = newPendingCount;
+        hasLoadedRef.current = true;
       })
       .catch(() => {});
   }, [selectedId, soundEnabled]);
 
+  // 병원 전환 시 카운터/로딩 플래그 리셋 → 새 병원에서도 첫 fetch는 조용히
   useEffect(() => {
+    hasLoadedRef.current = false;
+    prevPendingCountRef.current = 0;
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
     fetchDispatches();
+    if (isSupabaseConfigured()) {
+      return subscribeToHospitalDispatches(selectedId, fetchDispatches);
+    }
     const interval = setInterval(fetchDispatches, 3000);
     return () => clearInterval(interval);
-  }, [fetchDispatches]);
+  }, [fetchDispatches, selectedId]);
 
   const pendingDispatches = dispatches.filter(d => d.status === 'pending');
   const activeDispatches = dispatches.filter(d => d.status === 'accepted' || d.status === 'transporting');
@@ -197,6 +228,7 @@ export default function HospitalDashboardPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, rejectReason: status === 'rejected' ? (rejectReason || '수용 불가') : undefined }),
     });
+    vibrate(status === 'accepted' ? [100] : [50, 30, 50]);
     setRejectingId(null);
     setRejectReason('');
     fetchDispatches();
@@ -253,7 +285,7 @@ export default function HospitalDashboardPage() {
       <header className="bg-gradient-to-r from-blue-600 to-blue-700 text-white px-5 py-4 shadow-lg shadow-blue-900/20">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center gap-3">
-            <button onClick={() => window.location.href = '/'} className="w-10 h-10 bg-white/15 backdrop-blur rounded-xl flex items-center justify-center active:scale-95 transition-transform">
+            <button onClick={() => window.location.href = '/'} className="w-10 h-10 bg-white/15 backdrop-blur rounded-xl flex items-center justify-center active:scale-95 transition-transform" aria-label="홈으로">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/></svg>
             </button>
             <div className="flex-1">
@@ -268,6 +300,7 @@ export default function HospitalDashboardPage() {
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
               className="w-9 h-9 flex items-center justify-center bg-white/15 backdrop-blur rounded-xl active:scale-95 transition-transform"
+              aria-label={soundEnabled ? '알림음 끄기' : '알림음 켜기'}
               title={soundEnabled ? '알림음 끄기' : '알림음 켜기'}
             >
               {soundEnabled ? (
@@ -319,11 +352,13 @@ export default function HospitalDashboardPage() {
         </div>
       </div>
 
-      <main className="flex-1 p-4 space-y-3 max-w-2xl mx-auto w-full pb-28">
+      <main className={`flex-1 p-4 lg:p-6 w-full pb-28 mx-auto ${
+        activeTab === 'dispatches' ? 'max-w-2xl lg:max-w-7xl' : 'max-w-2xl space-y-3'
+      }`}>
         {activeTab === 'dispatches' ? (
-          <>
-            {/* Status Overview - Always visible */}
-            <div className="grid grid-cols-3 gap-2">
+          <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-5 space-y-3 lg:space-y-0">
+            {/* Sidebar: status overview (mobile: 3-col horizontal / desktop: stacked + sticky) */}
+            <aside className="grid grid-cols-3 gap-2 lg:grid-cols-1 lg:gap-3 lg:self-start lg:sticky lg:top-4">
               <div className="card !p-3 text-center">
                 <p className="text-2xl font-black text-blue-600">{availableBeds}</p>
                 <p className="text-[10px] text-gray-400 font-medium mt-0.5">가용 병상</p>
@@ -347,9 +382,11 @@ export default function HospitalDashboardPage() {
                   <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${hospital.operatingRooms.total > 0 ? (orAvailable / hospital.operatingRooms.total) * 100 : 0}%` }} />
                 </div>
               </div>
-            </div>
+            </aside>
 
-            {/* Incoming Dispatch Alerts */}
+            {/* Main column: dispatch lists */}
+            <section className="space-y-3">
+              {/* Incoming Dispatch Alerts */}
             {pendingDispatches.length > 0 && (
               <section className="space-y-2">
                 <h2 className="font-black text-red-600 text-sm flex items-center gap-2">
@@ -477,7 +514,8 @@ export default function HospitalDashboardPage() {
                 </div>
               </div>
             )}
-          </>
+            </section>
+          </div>
         ) : (
           <>
             {/* Management Tab */}
@@ -488,14 +526,39 @@ export default function HospitalDashboardPage() {
                 <span className="text-xs text-gray-400">총 {hospital.totalBeds}개</span>
               </div>
               <div className="flex items-center gap-3">
-                <button onClick={() => { setAvailableBeds(Math.max(0, availableBeds - 1)); setSaved(false); }} className="w-14 h-14 rounded-xl bg-red-50 border-2 border-red-200 text-red-600 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all">-</button>
+                <button
+                  onClick={() => { setAvailableBeds(Math.max(0, availableBeds - 1)); setSaved(false); }}
+                  disabled={availableBeds <= 0}
+                  className="w-14 h-14 rounded-xl bg-red-50 border-2 border-red-200 text-red-600 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all disabled:opacity-40 disabled:active:scale-100"
+                  aria-label="가용 병상 1 감소"
+                >−</button>
                 <div className="flex-1 text-center">
-                  <input type="number" value={availableBeds} onChange={e => { setAvailableBeds(Math.max(0, Math.min(hospital.totalBeds, parseInt(e.target.value) || 0))); setSaved(false); }} className="w-full text-center text-4xl font-black text-gray-800 bg-transparent focus:outline-none" />
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-1">
-                    <div className="h-full rounded-full transition-all duration-300" style={{ width: `${bedRatio}%`, backgroundColor: bedRatio > 50 ? '#16A34A' : bedRatio > 20 ? '#CA8A04' : '#DC2626' }} />
-                  </div>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={availableBeds}
+                    onChange={e => { setAvailableBeds(Math.max(0, Math.min(hospital.totalBeds, parseInt(e.target.value) || 0))); setSaved(false); }}
+                    className="w-full text-center text-4xl font-black text-gray-800 bg-transparent focus:outline-none"
+                  />
+                  <input
+                    type="range"
+                    min={0}
+                    max={hospital.totalBeds}
+                    value={availableBeds}
+                    onChange={e => { setAvailableBeds(parseInt(e.target.value)); setSaved(false); }}
+                    aria-label="가용 병상 슬라이더"
+                    className="bed-slider w-full mt-1.5 cursor-pointer"
+                    style={{
+                      background: `linear-gradient(to right, ${bedRatio > 50 ? '#16A34A' : bedRatio > 20 ? '#CA8A04' : '#DC2626'} 0%, ${bedRatio > 50 ? '#16A34A' : bedRatio > 20 ? '#CA8A04' : '#DC2626'} ${bedRatio}%, #F1F5F9 ${bedRatio}%, #F1F5F9 100%)`,
+                    }}
+                  />
                 </div>
-                <button onClick={() => { setAvailableBeds(Math.min(hospital.totalBeds, availableBeds + 1)); setSaved(false); }} className="w-14 h-14 rounded-xl bg-green-50 border-2 border-green-200 text-green-600 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all">+</button>
+                <button
+                  onClick={() => { setAvailableBeds(Math.min(hospital.totalBeds, availableBeds + 1)); setSaved(false); }}
+                  disabled={availableBeds >= hospital.totalBeds}
+                  className="w-14 h-14 rounded-xl bg-green-50 border-2 border-green-200 text-green-600 text-2xl font-bold flex items-center justify-center active:scale-90 transition-all disabled:opacity-40 disabled:active:scale-100"
+                  aria-label="가용 병상 1 증가"
+                >+</button>
               </div>
             </div>
 
@@ -518,17 +581,20 @@ export default function HospitalDashboardPage() {
             <div className="card !p-4">
               <h2 className="font-bold text-sm mb-3">수술실 현황</h2>
               <div className="grid grid-cols-5 gap-2">
-                {Array.from({ length: hospital.operatingRooms.total }).map((_, i) => {
-                  const isAvail = i < orAvailable;
-                  return (
-                    <button key={i} onClick={() => { setOrAvailable(i < orAvailable ? i : i + 1); setSaved(false); }}
-                      className={`aspect-square rounded-xl font-bold text-center transition-all border-2 active:scale-90 flex flex-col items-center justify-center ${isAvail ? 'bg-green-50 border-green-400 text-green-700 shadow-sm' : 'bg-red-50 border-red-200 text-red-400'}`}
-                    >
-                      <span className="text-base font-black">{i + 1}</span>
-                      <span className="text-[9px] font-bold mt-0.5">{isAvail ? 'OK' : '사용중'}</span>
-                    </button>
-                  );
-                })}
+                {orStatus.map((isAvail, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setOrStatus(prev => prev.map((v, idx) => idx === i ? !v : v));
+                      setSaved(false);
+                    }}
+                    className={`aspect-square rounded-xl font-bold text-center transition-all border-2 active:scale-90 flex flex-col items-center justify-center ${isAvail ? 'bg-green-50 border-green-400 text-green-700 shadow-sm' : 'bg-red-50 border-red-200 text-red-400'}`}
+                    aria-pressed={isAvail}
+                  >
+                    <span className="text-base font-black">{i + 1}</span>
+                    <span className="text-[9px] font-bold mt-0.5">{isAvail ? 'OK' : '사용중'}</span>
+                  </button>
+                ))}
               </div>
             </div>
 

@@ -159,7 +159,7 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
 
   if (noKey) {
     return (
-      <div className="bg-gray-100 rounded-2xl h-72 flex items-center justify-center text-gray-400 text-sm">
+      <div className="bg-gray-100 rounded-2xl h-80 lg:h-[420px] flex items-center justify-center text-gray-400 text-sm">
         <div className="text-center">
           <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
           <p>네이버 지도 API 키를 설정하면</p>
@@ -170,5 +170,5 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
     );
   }
 
-  return <div ref={containerRef} className="rounded-2xl h-72 w-full" />;
+  return <div ref={containerRef} className="rounded-2xl h-80 lg:h-[420px] w-full shadow-sm border border-gray-100" />;
 }

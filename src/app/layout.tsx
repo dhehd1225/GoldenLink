@@ -23,17 +23,13 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  // 접근성: 사용자 확대 허용 (WCAG 1.4.4 — 시각 약자가 화면 200%까지 확대 가능)
   themeColor: '#DC2626',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
-      <head>
-        <link rel="icon" href="/favicon.ico" />
-      </head>
       <body className={`${geistSans.variable} font-sans antialiased`}>
         {children}
       </body>

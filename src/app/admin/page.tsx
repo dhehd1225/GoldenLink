@@ -266,28 +266,6 @@ export default function AdminPage() {
               )}
             </div>
 
-            {/* System Info */}
-            <div className="card !p-4 bg-gray-50">
-              <h3 className="font-bold text-sm mb-2 text-gray-600">시스템 정보</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <p className="text-gray-400">데이터 소스</p>
-                  <p className="font-semibold text-gray-700">In-Memory (Mock)</p>
-                </div>
-                <div>
-                  <p className="text-gray-400">AI 엔진</p>
-                  <p className="font-semibold text-gray-700">Claude API</p>
-                </div>
-                <div>
-                  <p className="text-gray-400">갱신 주기</p>
-                  <p className="font-semibold text-gray-700">10초</p>
-                </div>
-                <div>
-                  <p className="text-gray-400">지도 API</p>
-                  <p className="font-semibold text-gray-700">Naver Maps</p>
-                </div>
-              </div>
-            </div>
           </div>
         ) : (
           <div className="text-center py-20 text-gray-400">통계 데이터를 불러올 수 없습니다.</div>

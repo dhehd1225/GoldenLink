@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getHospitals } from '@/lib/store';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
-  return NextResponse.json(getHospitals());
+  return NextResponse.json(await getHospitals());
 }

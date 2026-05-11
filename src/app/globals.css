@@ -272,10 +272,60 @@ html {
     radial-gradient(circle at 50% 50%, rgba(234, 88, 12, 0.05) 0%, transparent 50%);
 }
 
+/* Bed-count slider — webkit/moz thumb styling */
+.bed-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  border-radius: 999px;
+  outline: none;
+}
+.bed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid #2563EB;
+  cursor: grab;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: transform 0.15s ease;
+}
+.bed-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.15);
+}
+.bed-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid #2563EB;
+  cursor: grab;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+.bed-slider::-moz-range-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.15);
+}
+
 /* Glass header */
 .glass-header {
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* Accessibility — keyboard focus ring (마우스 클릭엔 영향 없음, 키보드 Tab 시에만 표시) */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+  border-radius: 8px;
 }

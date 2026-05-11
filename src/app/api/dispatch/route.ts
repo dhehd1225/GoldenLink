@@ -3,7 +3,7 @@ import { createDispatch, getDispatches } from '@/lib/store';
 
 export async function GET(req: NextRequest) {
   const hospitalId = req.nextUrl.searchParams.get('hospitalId') || undefined;
-  return NextResponse.json(getDispatches(hospitalId));
+  return NextResponse.json(await getDispatches(hospitalId));
 }
 
 export async function POST(req: NextRequest) {
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '필수 정보가 누락되었습니다.' }, { status: 400 });
   }
 
-  const result = createDispatch(
+  const result = await createDispatch(
     hospitalId,
     hospitalName,
     symptoms,
