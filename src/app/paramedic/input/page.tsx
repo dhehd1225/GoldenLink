@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { SymptomAnalysis, KTAS_INFO, KTASLevel, PatientInfo, DEFAULT_PATIENT_INFO, CONSCIOUSNESS_LABELS } from '@/lib/types';
 import { getDemoScenario, DemoScenario } from '@/lib/demo-scenarios';
+import { FieldGuideResponse } from '@/app/api/field-guide/route';
 
 const QUICK_SYMPTOMS = [
   { label: '흉통', icon: 'heart', text: '흉통, 가슴 압박감, 호흡곤란' },
@@ -55,6 +56,8 @@ export default function ParamedicInputPage() {
   const [isParsing, setIsParsing] = useState(false);
   const [autoFilledAt, setAutoFilledAt] = useState<number | null>(null);
   const [analysisStep, setAnalysisStep] = useState(0);
+  const [fieldGuide, setFieldGuide] = useState<FieldGuideResponse | null>(null);
+  const [isLoadingGuide, setIsLoadingGuide] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const demoStartedRef = useRef(false);
   const accumulatedRef = useRef('');
@@ -165,6 +168,23 @@ export default function ParamedicInputPage() {
     }, 1800);
     return () => clearInterval(interval);
   }, [isAnalyzing]);
+
+  // 분석 완료 시 자동으로 현장 처치 가이드 호출
+  useEffect(() => {
+    if (!analysis) { setFieldGuide(null); return; }
+    let cancelled = false;
+    setIsLoadingGuide(true);
+    fetch('/api/field-guide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysis, patientInfo }),
+    })
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setFieldGuide(data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setIsLoadingGuide(false); });
+    return () => { cancelled = true; };
+  }, [analysis, patientInfo]);
 
   const runDemoSequence = useCallback(async (scenario: DemoScenario) => {
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -910,6 +930,90 @@ export default function ParamedicInputPage() {
                 병원 찾기
               </button>
             </div>
+          </section>
+        )}
+
+        {/* Field Guide - 현장 처치 가이드 + 악화 위험도 */}
+        {analysis && (isLoadingGuide || fieldGuide) && (
+          <section className="card animate-slide-up !p-0 overflow-hidden">
+            {isLoadingGuide && !fieldGuide ? (
+              <div className="p-5 flex items-center gap-3">
+                <svg className="animate-spin h-5 w-5 text-emerald-500" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                <span className="text-sm text-gray-500 font-medium">현장 처치 가이드 생성 중...</span>
+              </div>
+            ) : fieldGuide && (
+              <>
+                {/* 악화 위험도 바 */}
+                <div className={`px-5 py-3 flex items-center justify-between ${
+                  fieldGuide.riskLevel === 'critical' ? 'bg-red-600' :
+                  fieldGuide.riskLevel === 'high' ? 'bg-orange-500' :
+                  fieldGuide.riskLevel === 'moderate' ? 'bg-amber-500' :
+                  'bg-emerald-500'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                    <span className="text-white text-xs font-bold uppercase tracking-wider">30분 내 악화 위험도</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-2xl font-black">{fieldGuide.deteriorationRisk}%</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      fieldGuide.riskLevel === 'critical' ? 'bg-white/30 text-white' :
+                      fieldGuide.riskLevel === 'high' ? 'bg-white/30 text-white' :
+                      'bg-white/30 text-white'
+                    }`}>
+                      {fieldGuide.riskLevel === 'critical' ? '위험' :
+                       fieldGuide.riskLevel === 'high' ? '높음' :
+                       fieldGuide.riskLevel === 'moderate' ? '주의' : '안정'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 위험 요인 */}
+                {fieldGuide.riskFactors.length > 0 && (
+                  <div className="px-5 py-2 bg-gray-50 border-b border-gray-100">
+                    <div className="flex flex-wrap gap-1.5">
+                      {fieldGuide.riskFactors.map((f, i) => (
+                        <span key={i} className="text-[11px] text-gray-600 bg-white px-2 py-0.5 rounded-md border border-gray-200">{f}</span>
+                      ))}
+                      <span className="text-[11px] text-gray-400 bg-white px-2 py-0.5 rounded-md border border-gray-200">
+                        모니터링 {fieldGuide.monitoringInterval}분 간격
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 처치 지침 */}
+                <div className="p-5">
+                  <div className="flex items-center gap-2 mb-3">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="#059669"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/></svg>
+                    <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider">이송 중 처치 가이드</p>
+                  </div>
+                  <ol className="space-y-2">
+                    {fieldGuide.treatments.map((t, i) => (
+                      <li key={i} className="flex items-start gap-2.5">
+                        <span className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black text-white mt-0.5 ${
+                          i === 0 ? 'bg-emerald-600' : 'bg-gray-400'
+                        }`}>{i + 1}</span>
+                        <span className="text-sm text-gray-800 font-medium leading-snug">{t}</span>
+                      </li>
+                    ))}
+                  </ol>
+
+                  {/* 금기사항 */}
+                  {fieldGuide.contraindications.length > 0 && (
+                    <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="#DC2626"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+                        <span className="text-[10px] font-bold text-red-700 uppercase tracking-wider">금기사항</span>
+                      </div>
+                      {fieldGuide.contraindications.map((c, i) => (
+                        <p key={i} className="text-xs text-red-700 font-semibold mt-1">- {c}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </section>
         )}
       </main>
