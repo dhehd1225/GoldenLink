@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MatchedHospital } from '@/lib/types';
+import LeafletMap from './LeafletMap';
 
 declare global {
   interface Window {
@@ -12,6 +13,7 @@ declare global {
         LatLngBounds: new (sw: NLatLng, ne: NLatLng) => unknown;
         Marker: new (opts: Record<string, unknown>) => NMarker;
         InfoWindow: new (opts: Record<string, unknown>) => NInfoWindow;
+        Polyline: new (opts: Record<string, unknown>) => NPolyline;
         Event: { addListener: (target: unknown, type: string, handler: () => void) => void };
         Size: new (w: number, h: number) => unknown;
         Point: new (x: number, y: number) => unknown;
@@ -28,6 +30,7 @@ interface NMap {
 }
 interface NMarker { setMap: (map: NMap | null) => void; getPosition: () => NLatLng }
 interface NInfoWindow { open: (map: NMap, marker: NMarker) => void; close: () => void; setMap: (map: NMap | null) => void }
+interface NPolyline { setMap: (map: NMap | null) => void }
 
 interface Props {
   hospitals: MatchedHospital[];
@@ -42,6 +45,7 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
   const mapRef = useRef<NMap | null>(null);
   const markersRef = useRef<NMarker[]>([]);
   const infoWindowsRef = useRef<NInfoWindow[]>([]);
+  const routeRef = useRef<NPolyline | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [noKey, setNoKey] = useState(false);
   const onSelectRef = useRef(onSelect);
@@ -61,6 +65,7 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
   const clearMarkers = useCallback(() => {
     markersRef.current.forEach(m => m.setMap(null));
     infoWindowsRef.current.forEach(iw => iw.close());
+    if (routeRef.current) { routeRef.current.setMap(null); routeRef.current = null; }
     markersRef.current = [];
     infoWindowsRef.current = [];
   }, []);
@@ -74,11 +79,11 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
       center,
       zoom: 12,
       zoomControl: true,
-      zoomControlOptions: { position: 3 }, // TOP_RIGHT
+      zoomControlOptions: { position: 3 },
     });
   }, [loaded, userLat, userLng]);
 
-  // Update markers
+  // Update markers + route
   useEffect(() => {
     const map = mapRef.current;
     if (!loaded || !map) return;
@@ -90,14 +95,18 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
     const userPos = new naver.maps.LatLng(userLat, userLng);
     points.push(userPos);
 
-    // User marker (blue dot)
+    // User marker (blue pulsing dot)
     const userMarker = new naver.maps.Marker({
       position: userPos,
       map,
       icon: {
-        content: '<div style="width:18px;height:18px;background:#3B82F6;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>',
-        size: new naver.maps.Size(18, 18),
-        anchor: new naver.maps.Point(9, 9),
+        content: `<div style="position:relative;width:20px;height:20px;">
+          <div style="position:absolute;inset:-4px;border-radius:50%;background:rgba(59,130,246,0.2);animation:pulse 2s infinite;"></div>
+          <div style="width:20px;height:20px;background:#3B82F6;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>
+        </div>
+        <style>@keyframes pulse{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.8);opacity:0}}</style>`,
+        size: new naver.maps.Size(20, 20),
+        anchor: new naver.maps.Point(10, 10),
       },
     });
     markersRef.current.push(userMarker);
@@ -108,13 +117,17 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
       const pos = new naver.maps.LatLng(h.lat, h.lng);
       points.push(pos);
 
+      const isSelected = selectedId === h.id;
+      const size = isSelected ? 38 : 32;
+
       const marker = new naver.maps.Marker({
         position: pos,
         map,
+        zIndex: isSelected ? 100 : 50 - i,
         icon: {
-          content: `<div style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:${rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;">${i + 1}</div>`,
-          size: new naver.maps.Size(32, 32),
-          anchor: new naver.maps.Point(16, 16),
+          content: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;background:${rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:${isSelected ? 16 : 14}px;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:${isSelected ? 3 : 2}px solid white;transition:all .2s;">${i + 1}</div>`,
+          size: new naver.maps.Size(size, size),
+          anchor: new naver.maps.Point(size / 2, size / 2),
         },
       });
       markersRef.current.push(marker);
@@ -132,7 +145,7 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
       });
       infoWindowsRef.current.push(infoWindow);
 
-      if (selectedId === h.id) infoWindow.open(map, marker);
+      if (isSelected) infoWindow.open(map, marker);
 
       naver.maps.Event.addListener(marker, 'click', () => {
         infoWindowsRef.current.forEach(iw => iw.close());
@@ -140,6 +153,42 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
         onSelectRef.current?.(h.id);
       });
     });
+
+    // Draw route to selected hospital via OSRM
+    const target = hospitals.find(h => h.id === selectedId) || hospitals[0];
+    if (target) {
+      fetch(`https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${target.lng},${target.lat}?overview=full&geometries=geojson`)
+        .then(r => r.json())
+        .then(data => {
+          if (!data.routes?.[0]?.geometry || !mapRef.current) return;
+          const coords = data.routes[0].geometry.coordinates.map(
+            (c: [number, number]) => new naver.maps.LatLng(c[1], c[0])
+          );
+          routeRef.current = new naver.maps.Polyline({
+            map: mapRef.current,
+            path: coords,
+            strokeColor: '#DC2626',
+            strokeWeight: 4,
+            strokeOpacity: 0.7,
+            strokeStyle: 'shortdash',
+          });
+        })
+        .catch(() => {
+          // Fallback: straight line
+          if (!mapRef.current) return;
+          routeRef.current = new naver.maps.Polyline({
+            map: mapRef.current,
+            path: [
+              new naver.maps.LatLng(userLat, userLng),
+              new naver.maps.LatLng(target.lat, target.lng),
+            ],
+            strokeColor: '#DC2626',
+            strokeWeight: 3,
+            strokeOpacity: 0.5,
+            strokeStyle: 'shortdash',
+          });
+        });
+    }
 
     // Fit bounds
     if (points.length >= 2) {
@@ -157,40 +206,9 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
     }
   }, [loaded, hospitals, userLat, userLng, selectedId, clearMarkers]);
 
+  // No API key: fall back to LeafletMap
   if (noKey) {
-    return (
-      <div className="relative bg-gradient-to-br from-blue-50 to-indigo-100 rounded-2xl h-80 lg:h-[420px] flex items-center justify-center overflow-hidden">
-        {/* Decorative map-like background */}
-        <div className="absolute inset-0 opacity-[0.07]">
-          <svg viewBox="0 0 400 300" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="0.5">
-            <path d="M0 150 Q100 100 200 150 T400 150" className="text-blue-400"/>
-            <path d="M0 180 Q150 130 300 180 T400 170" className="text-blue-300"/>
-            <circle cx="120" cy="130" r="3" fill="currentColor" className="text-red-400"/>
-            <circle cx="200" cy="145" r="3" fill="currentColor" className="text-red-400"/>
-            <circle cx="280" cy="155" r="3" fill="currentColor" className="text-red-400"/>
-            <circle cx="160" cy="160" r="3" fill="currentColor" className="text-blue-400"/>
-            <circle cx="240" cy="135" r="3" fill="currentColor" className="text-blue-400"/>
-            <path d="M50 50 L50 250 M100 50 L100 250 M150 50 L150 250 M200 50 L200 250 M250 50 L250 250 M300 50 L300 250 M350 50 L350 250" className="text-gray-300" strokeWidth="0.2"/>
-            <path d="M50 75 L350 75 M50 125 L350 125 M50 175 L350 175 M50 225 L350 225" className="text-gray-300" strokeWidth="0.2"/>
-          </svg>
-        </div>
-        {/* Hospital markers preview */}
-        <div className="relative z-10 text-center">
-          <div className="flex justify-center gap-3 mb-4">
-            {hospitals.slice(0, 3).map((h, i) => (
-              <div key={h.id} className="flex items-center gap-1.5 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full shadow-sm text-xs font-medium">
-                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold ${
-                  i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : 'bg-yellow-600'
-                }`}>{i + 1}</span>
-                <span className="text-gray-700 truncate max-w-[80px]">{h.name}</span>
-              </div>
-            ))}
-          </div>
-          <p className="text-sm text-blue-600/60 font-medium">병원 위치 지도</p>
-          <p className="text-xs text-blue-400/50 mt-1">실제 배포 시 지도가 표시됩니다</p>
-        </div>
-      </div>
-    );
+    return <LeafletMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={onSelect} />;
   }
 
   return <div ref={containerRef} className="rounded-2xl h-80 lg:h-[420px] w-full shadow-sm border border-gray-100" />;
