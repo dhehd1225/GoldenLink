@@ -9,9 +9,10 @@ interface Props {
   userLng: number;
   selectedId?: string;
   onSelect?: (id: string) => void;
+  transporting?: boolean;
 }
 
-export default function LeafletMap({ hospitals, userLat, userLng, selectedId, onSelect }: Props) {
+export default function LeafletMap({ hospitals, userLat, userLng, selectedId, onSelect, transporting }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markersRef = useRef<L.Marker[]>([]);
@@ -23,7 +24,6 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
   useEffect(() => {
     import('leaflet').then((L) => {
       LRef.current = L;
-      // Fix default marker icons
       delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
       L.Icon.Default.mergeOptions({
         iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -50,7 +50,6 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
       maxZoom: 18,
     }).addTo(map);
 
-    // Attribution (small, bottom-right)
     L.control.attribution({ position: 'bottomright', prefix: false })
       .addAttribution('&copy; <a href="https://osm.org">OSM</a>')
       .addTo(map);
@@ -69,13 +68,15 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
     const map = mapInstanceRef.current;
     if (!L || !map) return;
 
-    // Clear old markers
+    // Clear old
     markersRef.current.forEach(m => m.remove());
     markersRef.current = [];
     if (routeLayerRef.current) {
       routeLayerRef.current.remove();
       routeLayerRef.current = null;
     }
+
+    const target = hospitals.find(h => h.id === selectedId) || hospitals[0];
 
     // User marker (blue pulsing dot)
     const userIcon = L.divIcon({
@@ -92,16 +93,19 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
     markersRef.current.push(userMarker);
 
     const rankColors = ['#DC2626', '#EA580C', '#CA8A04', '#6B7280', '#6B7280'];
-    const bounds = L.latLngBounds([[userLat, userLng]]);
+    const allBounds = L.latLngBounds([[userLat, userLng]]);
 
     hospitals.slice(0, 5).forEach((h, i) => {
-      bounds.extend([h.lat, h.lng]);
+      allBounds.extend([h.lat, h.lng]);
+
+      const isTarget = transporting && h.id === (selectedId || hospitals[0]?.id);
+      const size = isTarget ? 40 : 34;
 
       const hospitalIcon = L.divIcon({
         className: '',
-        html: `<div style="display:flex;align-items:center;justify-content:center;width:34px;height:34px;background:${rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;${selectedId === h.id ? 'transform:scale(1.2);' : ''}">${i + 1}</div>`,
-        iconSize: [34, 34],
-        iconAnchor: [17, 17],
+        html: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;background:${isTarget ? '#DC2626' : rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:${isTarget ? 16 : 14}px;box-shadow:0 ${isTarget ? 4 : 2}px ${isTarget ? 12 : 8}px rgba(0,0,0,${isTarget ? 0.4 : 0.3});border:${isTarget ? 3 : 2}px solid white;">${i + 1}</div>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
       });
 
       const marker = L.marker([h.lat, h.lng], { icon: hospitalIcon })
@@ -121,9 +125,11 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
     });
 
     // Draw route to selected hospital
-    const target = hospitals.find(h => h.id === selectedId) || hospitals[0];
     if (target) {
-      // Try OSRM for real route, fall back to straight line
+      const routeStyle = transporting
+        ? { color: '#DC2626', weight: 6, opacity: 0.9, dashArray: undefined as string | undefined }
+        : { color: '#DC2626', weight: 4, opacity: 0.7, dashArray: '8, 8' as string | undefined };
+
       fetch(`https://router.project-osrm.org/route/v1/driving/${userLng},${userLat};${target.lng},${target.lat}?overview=full&geometries=geojson`)
         .then(r => r.json())
         .then(data => {
@@ -131,16 +137,16 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
             const coords = data.routes[0].geometry.coordinates.map(
               (c: [number, number]) => [c[1], c[0]] as [number, number]
             );
-            routeLayerRef.current = L.polyline(coords, {
-              color: '#DC2626',
-              weight: 4,
-              opacity: 0.7,
-              dashArray: '8, 8',
-            }).addTo(map);
+            routeLayerRef.current = L.polyline(coords, routeStyle).addTo(map);
+
+            // Transporting: zoom to route only (user → target hospital)
+            if (transporting) {
+              const routeBounds = L.latLngBounds([[userLat, userLng], [target.lat, target.lng]]);
+              map.fitBounds(routeBounds, { padding: [60, 60], maxZoom: 14 });
+            }
           }
         })
         .catch(() => {
-          // Fallback: straight dashed line
           routeLayerRef.current = L.polyline(
             [[userLat, userLng], [target.lat, target.lng]],
             { color: '#DC2626', weight: 3, opacity: 0.5, dashArray: '10, 10' }
@@ -148,8 +154,15 @@ export default function LeafletMap({ hospitals, userLat, userLng, selectedId, on
         });
     }
 
-    map.fitBounds(bounds, { padding: [40, 40] });
-  }, [ready, hospitals, userLat, userLng, selectedId, onSelect]);
+    // Default view: fit all hospitals. Transporting: zoom handled after route loads
+    if (!transporting) {
+      map.fitBounds(allBounds, { padding: [40, 40] });
+    } else if (target) {
+      // Immediate zoom before OSRM loads
+      const routeBounds = L.latLngBounds([[userLat, userLng], [target.lat, target.lng]]);
+      map.fitBounds(routeBounds, { padding: [60, 60], maxZoom: 14 });
+    }
+  }, [ready, hospitals, userLat, userLng, selectedId, onSelect, transporting]);
 
   return (
     <>

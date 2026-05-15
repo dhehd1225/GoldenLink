@@ -555,7 +555,7 @@ export default function ParamedicResultPage() {
               </div>
             </div>
           )}
-          <LeafletMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={handleSelect} />
+          <LeafletMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={handleSelect} transporting={dispatch?.status === 'transporting'} />
         </div>
 
         {/* Cascade Timeline */}
