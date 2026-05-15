@@ -74,8 +74,8 @@ export default function Home() {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-1 11h-4v4h-4v-4H6v-4h4V6h4v4h4v4z"/></svg>
             </div>
             <div>
-              <h1 className="text-base font-black text-gray-900 tracking-tight leading-none">GoldenLink</h1>
-              <p className="text-[10px] text-gray-400 font-medium">응급 병원 매칭 시스템</p>
+              <h1 className="text-lg font-black text-gray-900 tracking-tight leading-none">GoldenLink</h1>
+              <p className="text-[11px] text-gray-400 font-medium tracking-wide">응급 병원 매칭 시스템</p>
             </div>
           </div>
           <div className="flex items-center gap-3 text-xs text-gray-400">
