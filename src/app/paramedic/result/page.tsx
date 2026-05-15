@@ -418,13 +418,11 @@ export default function ParamedicResultPage() {
     } catch { /* ignore */ }
   }, [dispatch]);
 
-  const openNavigation = (h: MatchedHospital) => {
-    window.open(`https://map.naver.com/v5/directions/-/-/-/car?c=${h.lng},${h.lat},15,0,0,0,dh`, '_blank');
-  };
-
   const startTransport = (h: MatchedHospital) => {
-    openNavigation(h);
     updateDispatchStatus('transporting');
+    setSelectedId(h.id);
+    // Scroll to map
+    document.getElementById('route-map')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   const finishAndGoHome = () => {
@@ -544,7 +542,19 @@ export default function ParamedicResultPage() {
         )}
 
         {/* Map */}
-        <div className="p-4 pb-0">
+        <div id="route-map" className="p-4 pb-0">
+          {dispatch?.status === 'transporting' && selected && (
+            <div className="mb-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-2xl p-4 flex items-center gap-4 shadow-lg animate-slide-up">
+              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="white" className="ambulance-drive"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-white/70">이송 경로 안내</p>
+                <p className="font-bold text-lg truncate">{selected.name}</p>
+                <p className="text-sm text-white/80">{selected.distance}km · 약 {selected.estimatedTime}분 소요</p>
+              </div>
+            </div>
+          )}
           <LeafletMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={handleSelect} />
         </div>
 
