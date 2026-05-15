@@ -58,7 +58,14 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
 
     const script = document.createElement('script');
     script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${key}`;
-    script.onload = () => setLoaded(true);
+    script.onload = () => {
+      // Check if naver.maps actually loaded (auth can fail silently)
+      setTimeout(() => {
+        if (window.naver?.maps?.Map) setLoaded(true);
+        else setNoKey(true); // Auth failed, fall back to Leaflet
+      }, 1000);
+    };
+    script.onerror = () => setNoKey(true);
     document.head.appendChild(script);
   }, []);
 
@@ -73,14 +80,19 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
   // Init map once
   useEffect(() => {
     if (!loaded || !containerRef.current || mapRef.current) return;
-    const { naver } = window;
-    const center = new naver.maps.LatLng(userLat, userLng);
-    mapRef.current = new naver.maps.Map(containerRef.current, {
-      center,
-      zoom: 12,
-      zoomControl: true,
-      zoomControlOptions: { position: 3 },
-    });
+    try {
+      const { naver } = window;
+      const center = new naver.maps.LatLng(userLat, userLng);
+      mapRef.current = new naver.maps.Map(containerRef.current, {
+        center,
+        zoom: 12,
+        zoomControl: true,
+        zoomControlOptions: { position: 3 },
+      });
+    } catch {
+      // Naver Maps init failed (auth error), fall back to Leaflet
+      setNoKey(true);
+    }
   }, [loaded, userLat, userLng]);
 
   // Update markers + route
