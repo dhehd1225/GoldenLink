@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { SymptomAnalysis, MatchedHospital, KTAS_INFO, KTASLevel, Dispatch, PatientInfo, CONSCIOUSNESS_LABELS } from '@/lib/types';
-import NaverMap from '@/components/NaverMap';
+import LeafletMap from '@/components/LeafletMap';
 import { getDemoScenario } from '@/lib/demo-scenarios';
 import { subscribeToDispatch, isSupabaseConfigured } from '@/lib/realtime';
 
@@ -555,7 +555,7 @@ export default function ParamedicResultPage() {
               </div>
             </div>
           )}
-          <NaverMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={handleSelect} />
+          <LeafletMap hospitals={hospitals} userLat={userLat} userLng={userLng} selectedId={selectedId} onSelect={handleSelect} />
         </div>
 
         {/* Cascade Timeline */}
