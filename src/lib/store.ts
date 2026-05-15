@@ -99,18 +99,37 @@ function rowToDispatch(d: DbDispatch): Dispatch {
 }
 
 // ── In-memory fallback (env가 안 채워졌을 때만) ──
+// globalThis에 저장하여 Next.js HMR 시 데이터 유지
 
-const memHospitals: Hospital[] = JSON.parse(JSON.stringify(mockHospitals));
-const memDispatches: Dispatch[] = [];
-let memDispatchCounter = 0;
 interface MemActivity {
   id: string;
   type: 'dispatch_created' | 'dispatch_accepted' | 'dispatch_rejected' | 'hospital_updated';
   description: string;
   timestamp: string;
 }
-const memActivity: MemActivity[] = [];
-let memActivityCounter = 0;
+
+interface MemStore {
+  hospitals: Hospital[];
+  dispatches: Dispatch[];
+  dispatchCounter: number;
+  activity: MemActivity[];
+  activityCounter: number;
+}
+
+const g = globalThis as unknown as { __goldenlink_mem?: MemStore };
+if (!g.__goldenlink_mem) {
+  g.__goldenlink_mem = {
+    hospitals: JSON.parse(JSON.stringify(mockHospitals)),
+    dispatches: [],
+    dispatchCounter: 0,
+    activity: [],
+    activityCounter: 0,
+  };
+}
+const mem = g.__goldenlink_mem;
+const memHospitals = mem.hospitals;
+const memDispatches = mem.dispatches;
+const memActivity = mem.activity;
 
 function genDispatchId(): string {
   return `D${Date.now().toString(36).slice(-5).toUpperCase()}${Math.floor(Math.random() * 100).toString().padStart(2, '0')}`;
@@ -120,7 +139,7 @@ async function addActivity(type: MemActivity['type'], description: string) {
   const sb = getSupabase();
   if (!sb) {
     memActivity.unshift({
-      id: `A${String(++memActivityCounter).padStart(4, '0')}`,
+      id: `A${String(++mem.activityCounter).padStart(4, '0')}`,
       type,
       description,
       timestamp: new Date().toISOString(),
@@ -209,7 +228,7 @@ export async function createDispatch(
 
   if (!sb) {
     const dispatch: Dispatch = {
-      id: `D${String(++memDispatchCounter).padStart(4, '0')}`,
+      id: `D${String(++mem.dispatchCounter).padStart(4, '0')}`,
       hospitalId,
       hospitalName,
       symptoms,
