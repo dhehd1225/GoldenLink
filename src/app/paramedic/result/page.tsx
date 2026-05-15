@@ -177,6 +177,18 @@ export default function ParamedicResultPage() {
     init();
   }, [router]);
 
+  // 이송 중 실시간 GPS 추적
+  useEffect(() => {
+    if (!dispatch || dispatch.status !== 'transporting') return;
+    if (!navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition(
+      pos => { setUserLat(pos.coords.latitude); setUserLng(pos.coords.longitude); },
+      () => {},
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [dispatch?.status]);
+
   // localStorage에 활성 dispatch ID 저장/제거 (새로고침/탭 재오픈 후 복원용)
   useEffect(() => {
     if (typeof window === 'undefined' || !dispatch) return;
