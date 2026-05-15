@@ -159,12 +159,35 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
 
   if (noKey) {
     return (
-      <div className="bg-gray-100 rounded-2xl h-80 lg:h-[420px] flex items-center justify-center text-gray-400 text-sm">
-        <div className="text-center">
-          <svg className="w-10 h-10 mx-auto mb-2 text-gray-300" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-          <p>네이버 지도 API 키를 설정하면</p>
-          <p>지도가 표시됩니다</p>
-          <p className="text-xs mt-2 text-gray-300">NEXT_PUBLIC_NAVER_MAP_KEY</p>
+      <div className="relative bg-gradient-to-br from-blue-50 to-indigo-100 rounded-2xl h-80 lg:h-[420px] flex items-center justify-center overflow-hidden">
+        {/* Decorative map-like background */}
+        <div className="absolute inset-0 opacity-[0.07]">
+          <svg viewBox="0 0 400 300" className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="0.5">
+            <path d="M0 150 Q100 100 200 150 T400 150" className="text-blue-400"/>
+            <path d="M0 180 Q150 130 300 180 T400 170" className="text-blue-300"/>
+            <circle cx="120" cy="130" r="3" fill="currentColor" className="text-red-400"/>
+            <circle cx="200" cy="145" r="3" fill="currentColor" className="text-red-400"/>
+            <circle cx="280" cy="155" r="3" fill="currentColor" className="text-red-400"/>
+            <circle cx="160" cy="160" r="3" fill="currentColor" className="text-blue-400"/>
+            <circle cx="240" cy="135" r="3" fill="currentColor" className="text-blue-400"/>
+            <path d="M50 50 L50 250 M100 50 L100 250 M150 50 L150 250 M200 50 L200 250 M250 50 L250 250 M300 50 L300 250 M350 50 L350 250" className="text-gray-300" strokeWidth="0.2"/>
+            <path d="M50 75 L350 75 M50 125 L350 125 M50 175 L350 175 M50 225 L350 225" className="text-gray-300" strokeWidth="0.2"/>
+          </svg>
+        </div>
+        {/* Hospital markers preview */}
+        <div className="relative z-10 text-center">
+          <div className="flex justify-center gap-3 mb-4">
+            {hospitals.slice(0, 3).map((h, i) => (
+              <div key={h.id} className="flex items-center gap-1.5 bg-white/80 backdrop-blur px-3 py-1.5 rounded-full shadow-sm text-xs font-medium">
+                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold ${
+                  i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : 'bg-yellow-600'
+                }`}>{i + 1}</span>
+                <span className="text-gray-700 truncate max-w-[80px]">{h.name}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-sm text-blue-600/60 font-medium">병원 위치 지도</p>
+          <p className="text-xs text-blue-400/50 mt-1">실제 배포 시 지도가 표시됩니다</p>
         </div>
       </div>
     );
