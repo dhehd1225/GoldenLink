@@ -431,10 +431,14 @@ export default function ParamedicResultPage() {
   }, [dispatch]);
 
   const startTransport = (h: MatchedHospital) => {
-    updateDispatchStatus('transporting');
+    // Update UI immediately (don't wait for server)
+    if (dispatch) {
+      setDispatch({ ...dispatch, status: 'transporting', updatedAt: new Date().toISOString() });
+    }
     setSelectedId(h.id);
-    // Scroll to map
     document.getElementById('route-map')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Then sync to server (best-effort)
+    updateDispatchStatus('transporting');
   };
 
   const finishAndGoHome = () => {
@@ -878,7 +882,7 @@ export default function ParamedicResultPage() {
         {/* Arrival button — transporting 상태 */}
         {dispatch?.status === 'transporting' && (
           <div className="sticky bottom-0 bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 shadow-2xl">
-            <button onClick={() => updateDispatchStatus('arrived')} className="w-full flex items-center justify-center gap-3 py-3 font-bold text-xl active:scale-95 transition-all">
+            <button onClick={() => { if (dispatch) setDispatch({ ...dispatch, status: 'arrived', updatedAt: new Date().toISOString() }); updateDispatchStatus('arrived'); }} className="w-full flex items-center justify-center gap-3 py-3 font-bold text-xl active:scale-95 transition-all">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
               병원 도착 · 환자 인계 완료
             </button>
