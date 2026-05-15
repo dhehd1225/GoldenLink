@@ -137,7 +137,7 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
       });
       infoWindowsRef.current.push(infoWindow);
 
-      if (isSelected) infoWindow.open(map, marker);
+      if (selectedId === h.id) infoWindow.open(map, marker);
 
       naver.maps.Event.addListener(marker, 'click', () => {
         infoWindowsRef.current.forEach(iw => iw.close());
