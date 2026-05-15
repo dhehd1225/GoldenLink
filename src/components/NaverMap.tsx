@@ -63,9 +63,9 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
   }, []);
 
   const clearMarkers = useCallback(() => {
-    markersRef.current.forEach(m => m.setMap(null));
-    infoWindowsRef.current.forEach(iw => iw.close());
-    if (routeRef.current) { routeRef.current.setMap(null); routeRef.current = null; }
+    markersRef.current.forEach(m => { try { m.setMap(null); } catch { /* naver sdk cleanup race */ } });
+    infoWindowsRef.current.forEach(iw => { try { iw.close(); } catch { /* ignore */ } });
+    if (routeRef.current) { try { routeRef.current.setMap(null); } catch { /* ignore */ } routeRef.current = null; }
     markersRef.current = [];
     infoWindowsRef.current = [];
   }, []);
@@ -95,18 +95,14 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
     const userPos = new naver.maps.LatLng(userLat, userLng);
     points.push(userPos);
 
-    // User marker (blue pulsing dot)
+    // User marker (blue dot)
     const userMarker = new naver.maps.Marker({
       position: userPos,
       map,
       icon: {
-        content: `<div style="position:relative;width:20px;height:20px;">
-          <div style="position:absolute;inset:-4px;border-radius:50%;background:rgba(59,130,246,0.2);animation:pulse 2s infinite;"></div>
-          <div style="width:20px;height:20px;background:#3B82F6;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>
-        </div>
-        <style>@keyframes pulse{0%,100%{transform:scale(1);opacity:.6}50%{transform:scale(1.8);opacity:0}}</style>`,
-        size: new naver.maps.Size(20, 20),
-        anchor: new naver.maps.Point(10, 10),
+        content: '<div style="width:18px;height:18px;background:#3B82F6;border:3px solid white;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>',
+        size: new naver.maps.Size(18, 18),
+        anchor: new naver.maps.Point(9, 9),
       },
     });
     markersRef.current.push(userMarker);
@@ -117,17 +113,13 @@ export default function NaverMap({ hospitals, userLat, userLng, selectedId, onSe
       const pos = new naver.maps.LatLng(h.lat, h.lng);
       points.push(pos);
 
-      const isSelected = selectedId === h.id;
-      const size = isSelected ? 38 : 32;
-
       const marker = new naver.maps.Marker({
         position: pos,
         map,
-        zIndex: isSelected ? 100 : 50 - i,
         icon: {
-          content: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;background:${rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:${isSelected ? 16 : 14}px;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:${isSelected ? 3 : 2}px solid white;transition:all .2s;">${i + 1}</div>`,
-          size: new naver.maps.Size(size, size),
-          anchor: new naver.maps.Point(size / 2, size / 2),
+          content: `<div style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:${rankColors[i]};color:white;border-radius:50%;font-weight:900;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;">${i + 1}</div>`,
+          size: new naver.maps.Size(32, 32),
+          anchor: new naver.maps.Point(16, 16),
         },
       });
       markersRef.current.push(marker);
